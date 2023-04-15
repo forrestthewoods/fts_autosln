@@ -1,36 +1,38 @@
 use anyhow::anyhow;
 use std::collections::HashSet;
-use std::ffi::{c_void, CStr, CString};
-use std::os::windows::ffi::OsStrExt;
+use std::ffi::{c_void, CString};
 use std::path::{Path, PathBuf};
-use windows::core::*;
 
 use windows::Win32::System::Diagnostics::Debug as WinDbg;
 use windows_sys::Win32::System::SystemServices as WinSys;
 
 fn main() {
     println!("hello world");
-    hacky_tests();
+    
+    let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
+    let pdbs = find_all_pdbs(&PathBuf::from(test_target));
+    
+    if let Ok(pdbs) = pdbs {
+        for pdb in pdbs {
+            println!("{:?}", pdb);
+        }
+    }
+
     println!("goodbye cruel worl");
 }
 
 fn find_all_pdbs(target: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let mut pdbs: Vec<PathBuf> = Default::default();
 
-    let mut open_list: Vec<PathBuf> = vec![target.to_owned()];
+    let mut open_list: Vec<(PathBuf, PathBuf)> = vec![split_filepath(target)?];
     let mut closed_list: HashSet<PathBuf> = Default::default();
 
     while !open_list.is_empty() {
         // Split into filename/directory
-        let full_path = open_list.pop().unwrap();
-        let filename = full_path
-            .file_name()
-            .ok_or_else(|| anyhow!("Couldn't get filename from {:?}", target))?;
-        let dir = full_path
-            .parent()
-            .ok_or_else(|| anyhow!("Couldn't get parent from {:?}", target))?;
+        let (filename, dir) = open_list.pop().unwrap();
 
         // Try to find PDB
+        let full_path = dir.join(&filename);
         let pdb_path = full_path.with_extension("pdb");
         let pdb_metadata = std::fs::metadata(&pdb_path);
         if let Ok(meta) = pdb_metadata {
@@ -39,33 +41,37 @@ fn find_all_pdbs(target: &Path) -> anyhow::Result<Vec<PathBuf>> {
             }
         }
 
-        let inserted = closed_list.insert(filename.into());
-        if !inserted {
-            continue;
+        // Get list of dependencies
+        if let Ok(deps) = get_dependencies(&filename, &dir) {
+            for dep in deps {
+                let inserted = closed_list.insert(dep.clone());
+                if inserted {
+                    // Add new deps to open list
+                    open_list.push((dep, dir.clone()));
+                }
+            }
         }
     }
-
-    // while open_list
-
-    let filename = target
-        .file_name()
-        .ok_or_else(|| anyhow!("Couldn't get filename from {:?}", target))?;
-    let dir = target
-        .parent()
-        .ok_or_else(|| anyhow!("Couldn't get parent from {:?}", target))?;
-
-    //let test = s!(filename);
 
     Ok(pdbs)
 }
 
-fn hacky_tests() {
-    //let name1 = s!("UnrealEditor.exe");
-    //let path1 = s!("C:/ue511/UE_5.1/Engine/Binaries/Win64");
+fn split_filepath(path: &Path) -> anyhow::Result<(PathBuf, PathBuf)> {
+    let filename = path
+        .file_name()
+        .ok_or_else(|| anyhow!("Couldn't get filename from {:?}", path))?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| anyhow!("Couldn't get parent from {:?}", path))?;
 
-    let path = PathBuf::from("C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor-UnrealEd.dll");
-    let name: &std::ffi::OsStr = path.file_name().unwrap();
-    let dir: &std::ffi::OsStr = path.parent().unwrap().as_os_str();
+    Ok((filename.into(), dir.into()))
+}
+
+fn get_dependencies(filename: &Path, dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let mut result: Vec<PathBuf> = Default::default();
+
+    let name: &std::ffi::OsStr = filename.as_os_str();
+    let dir: &std::ffi::OsStr = dir.as_os_str();
 
     let c_name = path_to_cstring(&name).unwrap();
     let c_path = path_to_cstring(&dir).unwrap();
@@ -75,8 +81,10 @@ fn hacky_tests() {
 
     unsafe {
         let image = WinDbg::ImageLoad(name, path);
-        //let image = WinDbg::ImageLoad(c_name.as_ptr(), c_path.as_ptr());
-        println!("{:?}", image);
+        if image.is_null() {
+            anyhow::bail!("Could not load image {:?}{:?}", path, name);
+        }
+
         let file_header = (*image).FileHeader;
         let optional_header = &(*file_header).OptionalHeader;
         let mapped_address = (*image).MappedAddress;
@@ -88,8 +96,6 @@ fn hacky_tests() {
                 get_ptr_from_virtual_address(virtual_address, file_header, mapped_address)
                     as *const WinSys::IMAGE_IMPORT_DESCRIPTOR;
 
-            println!("ImportDesc: {:?}", import_desc);
-
             loop {
                 if (*import_desc).TimeDateStamp == 0 && (*import_desc).Name == 0 {
                     break;
@@ -99,12 +105,14 @@ fn hacky_tests() {
                     get_ptr_from_virtual_address((*import_desc).Name, file_header, mapped_address)
                         as *const i8;
 
-                let name = std::ffi::CStr::from_ptr(name_ptr).to_str();
-                println!("Will this explode? {:?}", name);
+                let name = std::ffi::CStr::from_ptr(name_ptr).to_str()?;
+                result.push(name.into());
                 import_desc = import_desc.offset(1);
             }
         }
     }
+
+    Ok(result)
 }
 
 unsafe fn get_ptr_from_virtual_address(
