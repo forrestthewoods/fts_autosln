@@ -1,0 +1,7 @@
+[package]
+name = "fts_autosln"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+which = "4.2.2"
