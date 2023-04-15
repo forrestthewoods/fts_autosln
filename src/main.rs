@@ -1,5 +1,6 @@
 use anyhow::anyhow;
-use std::ffi::{CStr, CString, c_void};
+use std::collections::HashSet;
+use std::ffi::{c_void, CStr, CString};
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use windows::core::*;
@@ -14,23 +15,57 @@ fn main() {
 }
 
 fn find_all_pdbs(target: &Path) -> anyhow::Result<Vec<PathBuf>> {
-    let filename = target.file_name().ok_or_else(|| anyhow!("Couldn't get filename from {:?}", target))?;
-    let dir = target.parent().ok_or_else(|| anyhow!("Couldn't get parent from {:?}", target))?;
-    
+    let mut pdbs: Vec<PathBuf> = Default::default();
+
+    let mut open_list: Vec<PathBuf> = vec![target.to_owned()];
+    let mut closed_list: HashSet<PathBuf> = Default::default();
+
+    while !open_list.is_empty() {
+        // Split into filename/directory
+        let full_path = open_list.pop().unwrap();
+        let filename = full_path
+            .file_name()
+            .ok_or_else(|| anyhow!("Couldn't get filename from {:?}", target))?;
+        let dir = full_path
+            .parent()
+            .ok_or_else(|| anyhow!("Couldn't get parent from {:?}", target))?;
+
+        // Try to find PDB
+        let pdb_path = full_path.with_extension("pdb");
+        let pdb_metadata = std::fs::metadata(&pdb_path);
+        if let Ok(meta) = pdb_metadata {
+            if meta.is_file() {
+                pdbs.push(pdb_path);
+            }
+        }
+
+        let inserted = closed_list.insert(filename.into());
+        if !inserted {
+            continue;
+        }
+    }
+
+    // while open_list
+
+    let filename = target
+        .file_name()
+        .ok_or_else(|| anyhow!("Couldn't get filename from {:?}", target))?;
+    let dir = target
+        .parent()
+        .ok_or_else(|| anyhow!("Couldn't get parent from {:?}", target))?;
+
     //let test = s!(filename);
 
-    Ok(Default::default())
+    Ok(pdbs)
 }
-
-
 
 fn hacky_tests() {
     //let name1 = s!("UnrealEditor.exe");
     //let path1 = s!("C:/ue511/UE_5.1/Engine/Binaries/Win64");
 
-    let path = PathBuf::from("C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe");
-    let name : &std::ffi::OsStr = path.file_name().unwrap();
-    let dir : &std::ffi::OsStr = path.parent().unwrap().as_os_str();
+    let path = PathBuf::from("C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor-UnrealEd.dll");
+    let name: &std::ffi::OsStr = path.file_name().unwrap();
+    let dir: &std::ffi::OsStr = path.parent().unwrap().as_os_str();
 
     let c_name = path_to_cstring(&name).unwrap();
     let c_path = path_to_cstring(&dir).unwrap();
@@ -48,11 +83,10 @@ fn hacky_tests() {
         if optional_header.NumberOfRvaAndSizes >= 2 {
             //let import_desc = windows::Win32::System::Diagnostics::Debug::GetPointer
             let virtual_address = optional_header.DataDirectory[1].VirtualAddress;
-            
-            let mut import_desc = get_ptr_from_virtual_address(
-                virtual_address,
-                file_header,
-                mapped_address) as *const WinSys::IMAGE_IMPORT_DESCRIPTOR;
+
+            let mut import_desc =
+                get_ptr_from_virtual_address(virtual_address, file_header, mapped_address)
+                    as *const WinSys::IMAGE_IMPORT_DESCRIPTOR;
 
             println!("ImportDesc: {:?}", import_desc);
 
@@ -61,10 +95,9 @@ fn hacky_tests() {
                     break;
                 }
 
-                let name_ptr = get_ptr_from_virtual_address(
-                    (*import_desc).Name,
-                    file_header,
-                    mapped_address) as * const i8;
+                let name_ptr =
+                    get_ptr_from_virtual_address((*import_desc).Name, file_header, mapped_address)
+                        as *const i8;
 
                 let name = std::ffi::CStr::from_ptr(name_ptr).to_str();
                 println!("Will this explode? {:?}", name);
@@ -75,10 +108,10 @@ fn hacky_tests() {
 }
 
 unsafe fn get_ptr_from_virtual_address(
-    addr: u32, 
-    image_header: * const WinDbg::IMAGE_NT_HEADERS64,
-    mapped_address: * const u8) -> * const c_void
-{
+    addr: u32,
+    image_header: *const WinDbg::IMAGE_NT_HEADERS64,
+    mapped_address: *const u8,
+) -> *const c_void {
     let section_header = get_enclosing_section_header(addr, image_header);
     if section_header == std::ptr::null() {
         return std::ptr::null();
@@ -91,9 +124,8 @@ unsafe fn get_ptr_from_virtual_address(
 
 unsafe fn get_enclosing_section_header(
     addr: u32,
-    image_header: * const WinDbg::IMAGE_NT_HEADERS64) 
--> * const WinDbg::IMAGE_SECTION_HEADER 
-{
+    image_header: *const WinDbg::IMAGE_NT_HEADERS64,
+) -> *const WinDbg::IMAGE_SECTION_HEADER {
     // Not sure how do replicate this macro in rust
     // so offset is hardcoded
     //#define IMAGE_FIRST_SECTION( ntheader ) ((PIMAGE_SECTION_HEADER)        \
@@ -101,9 +133,9 @@ unsafe fn get_enclosing_section_header(
     //     FIELD_OFFSET( IMAGE_NT_HEADERS, OptionalHeader ) +                 \
     //     ((ntheader))->FileHeader.SizeOfOptionalHeader   \
     //    ))
-    const OFFSET : isize = 264; // computed in C++ via
+    const OFFSET: isize = 264; // computed in C++ via
 
-    let sections : * const WinDbg::IMAGE_SECTION_HEADER = cast_ptr(image_header, OFFSET);
+    let sections: *const WinDbg::IMAGE_SECTION_HEADER = cast_ptr(image_header, OFFSET);
 
     let num_sections = (*image_header).FileHeader.NumberOfSections as isize;
     for idx in 0..num_sections {
