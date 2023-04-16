@@ -1,4 +1,6 @@
 use anyhow::anyhow;
+use itertools::*;
+use pdb::*;
 use std::collections::HashSet;
 use std::ffi::{c_void, CString};
 use std::path::{Path, PathBuf};
@@ -9,16 +11,27 @@ use windows_sys::Win32::System::SystemServices as WinSys;
 fn main() {
     println!("hello world");
     
-    let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
+    //let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
+    //let test_target = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe";
+    let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
     let pdbs = find_all_pdbs(&PathBuf::from(test_target));
     
+    let mut source_files : HashSet<PathBuf> = Default::default(); 
     if let Ok(pdbs) = pdbs {
         for pdb in pdbs {
-            println!("{:?}", pdb);
+            if let Ok(pdb_files) = get_source_files(&pdb) {
+                source_files.extend(pdb_files);
+            }
         }
     }
 
-    println!("goodbye cruel worl");
+    let sorted_files : Vec<_> = source_files.iter().sorted().collect();
+    for file in sorted_files {
+
+        println!("{:?}", file);
+    }
+
+    println!("goodbye cruel world");
 }
 
 fn find_all_pdbs(target: &Path) -> anyhow::Result<Vec<PathBuf>> {
@@ -54,6 +67,45 @@ fn find_all_pdbs(target: &Path) -> anyhow::Result<Vec<PathBuf>> {
     }
 
     Ok(pdbs)
+}
+
+fn get_source_files(pdb: &PathBuf) -> anyhow::Result<Vec<PathBuf>> {
+    let mut result : Vec<PathBuf> = Default::default();
+
+    // Open PDB    
+    let pdbfile = std::fs::File::open(&pdb)?;
+    let mut pdb = pdb::PDB::open(pdbfile)?;
+    let string_table = pdb.string_table()?;
+
+    // Iterate PDB modules
+    let di = pdb.debug_information()?;
+    let mut modules = di.modules()?;
+    while let Some(module) = modules.next()? {
+        if let Some(module_info) = pdb.module_info(&module)? {
+            let line_program = module_info.line_program()?;
+
+            // Iterate files
+            let mut file_iter = line_program.files();
+            while let Some(file) = file_iter.next()? {
+                // Construct file path
+                let raw_filepath = string_table.get(file.name)?;
+                let filename_utf8 = std::str::from_utf8(raw_filepath.as_bytes())?;
+                let filepath = PathBuf::from(filename_utf8);
+                
+                // Verify file exists on disk
+                let file_meta = std::fs::metadata(&filepath);
+                if let Ok(meta) = file_meta {
+                    if meta.is_file() {
+                        result.push(filepath);
+                    }
+                }
+
+                //result.push(filepath);
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 fn split_filepath(path: &Path) -> anyhow::Result<(PathBuf, PathBuf)> {
