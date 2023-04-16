@@ -3,6 +3,7 @@ use itertools::*;
 use pdb::*;
 use std::collections::HashSet;
 use std::ffi::{c_void, CString};
+use std::os::windows::prelude::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use windows::Win32::System::Diagnostics::Debug as WinDbg;
@@ -15,7 +16,7 @@ fn main() {
     let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
     //let test_target = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe";
     //let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
-    
+
     // Get PDBs for target
     let pdbs = find_all_pdbs(&PathBuf::from(test_target));
 
@@ -102,7 +103,7 @@ fn get_source_files(pdb: &PathBuf) -> anyhow::Result<Vec<PathBuf>> {
                 let filepath = PathBuf::from(filename_utf8);
 
                 // Verify file exists on disk
-//                let roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1".into()];
+                //                let roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1".into()];
 
                 if false {
                     let file_meta = std::fs::metadata(&filepath);
@@ -180,28 +181,52 @@ fn get_dependencies(filename: &Path, dir: &Path) -> anyhow::Result<Vec<PathBuf>>
     Ok(result)
 }
 
-fn find_roots<'a, I: Iterator<Item=&'a PathBuf>>(paths: I) -> Vec<PathBuf> {
-    let mut maybe_roots: Vec<PathBuf> = Default::default();
+fn find_roots<'a, I: Iterator<Item = &'a PathBuf>>(paths: I) -> Vec<PathBuf> {
+    // bool is if its been "shortened" at least once
+    let mut maybe_roots: Vec<(PathBuf, bool)> = Default::default();
 
     // Iterate all paths
     for path in paths {
+        // Lowercase
+        let path : PathBuf = path.as_os_str().to_ascii_lowercase().into();
+
         // iterate all roots
         let mut any_matches = false;
         for i in 0..maybe_roots.len() {
-            let maybe_root = &maybe_roots[i];
+            let maybe_root = &maybe_roots[i].0;
 
             // Count how many leading characters are the same
             let matching_part: PathBuf = path
                 .components()
                 .zip(maybe_root.components())
                 .take_while(|(a, b)| a == b)
-                .map(|(a,_)| a)
+                .map(|(a, _)| a)
                 .collect();
 
-            // Keep matching_part if its shorter than maybe_root
-            let matching_len = matching_part.as_os_str().len();
+            // Do nothing if matching part is already root
+            if matching_part == *maybe_root {
+                any_matches = true;
+                break;
+            }
+
+            // Ignore drive letters
+            let os_str = matching_part.as_os_str();
+            let matching_len = os_str.len();
+            if matching_len == 3 {
+                let a = os_str.encode_wide().nth(1).unwrap();
+                let b = os_str.encode_wide().nth(2).unwrap();
+
+                let sep = ":".encode_utf16().nth(0).unwrap();
+                let slash_a = "\\".encode_utf16().nth(0).unwrap();
+                let slash_b = "/".encode_utf16().nth(0).unwrap();
+                if a == sep && (b == slash_a || b == slash_b) {
+                    continue;
+                }
+            }
+
+            // This matching part may be shorter
             if matching_len > 0 && matching_len < maybe_root.as_os_str().len() {
-                maybe_roots[i] = matching_part;
+                maybe_roots[i] = (matching_part, true);
                 any_matches = true;
                 break;
             }
@@ -209,12 +234,15 @@ fn find_roots<'a, I: Iterator<Item=&'a PathBuf>>(paths: I) -> Vec<PathBuf> {
 
         // Didn't align with anything. This is maybe a root!
         if !any_matches {
-            maybe_roots.push(path.to_path_buf());
+            maybe_roots.push((path.to_path_buf(), false));
         }
     }
 
     // Our maybe_roots are now known roots
     maybe_roots
+        .into_iter()
+        .filter_map(|(path, shortened)| if shortened { Some(path) } else { None })
+        .collect()
 }
 
 unsafe fn get_ptr_from_virtual_address(
