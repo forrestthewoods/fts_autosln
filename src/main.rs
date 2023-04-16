@@ -30,14 +30,54 @@ fn main() {
         }
     }
 
-    let sorted_files: Vec<_> = source_files.iter().sorted().collect();
-    for file in &sorted_files {
-        println!("{:?}", file);
-    }
+    // let sorted_files: Vec<_> = source_files.iter().sorted().collect();
+    // for file in &sorted_files {
+    //     println!("{:?}", file);
+    // }
 
     // Get roots from list of filepaths
-    for root in find_roots(sorted_files.iter().map(|b| *b)) {
+    let pdb_roots = find_roots(source_files.iter());
+    for root in &pdb_roots {
         println!("Root: {:?}", root);
+    }
+
+    let file_exists = |path: &Path| {
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if meta.is_file() {
+                return true;
+            } else if meta.is_symlink() {
+                // Follow symlink
+                if let Ok(real_path) = std::fs::read_link(&path) {
+                    if let Ok(meta) = std::fs::metadata(&real_path) {
+                        if meta.is_file() {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        return false;
+    };
+
+    let user_roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1".into()];
+
+    // Find local files
+    let mut local_files : Vec<PathBuf> = Default::default();
+    for file in source_files.into_iter() {
+        // File exists on disk
+        if file_exists(&file) {
+            local_files.push(file);
+        } else {
+            let lower_file : PathBuf = file.as_os_str().to_ascii_lowercase().into();
+
+            // Couldn't find file. Let's try changing roots
+            for pdb_root in &pdb_roots {
+                if lower_file.starts_with(pdb_root) {
+                    // Replace pdb_root
+                }
+            }
+        }
     }
 
     println!("goodbye cruel world");
