@@ -2,7 +2,7 @@ use anyhow::anyhow;
 use itertools::*;
 use pdb::*;
 use std::collections::HashSet;
-use std::ffi::{c_void, CString, OsString};
+use std::ffi::{c_void, CString};
 use std::path::{Path, PathBuf};
 
 use windows::Win32::System::Diagnostics::Debug as WinDbg;
@@ -35,7 +35,7 @@ fn main() {
     }
 
     // Get roots from list of filepaths
-    for root in find_roots(sorted_files.iter()) {
+    for root in find_roots(sorted_files.iter().map(|b| *b)) {
         println!("Root: {:?}", root);
     }
 
@@ -180,7 +180,7 @@ fn get_dependencies(filename: &Path, dir: &Path) -> anyhow::Result<Vec<PathBuf>>
     Ok(result)
 }
 
-fn find_roots<'a, I: Iterator<Item=&'a &'a PathBuf>>(paths: I) -> Vec<PathBuf> {
+fn find_roots<'a, I: Iterator<Item=&'a PathBuf>>(paths: I) -> Vec<PathBuf> {
     let mut maybe_roots: Vec<PathBuf> = Default::default();
 
     // Iterate all paths
@@ -199,7 +199,8 @@ fn find_roots<'a, I: Iterator<Item=&'a &'a PathBuf>>(paths: I) -> Vec<PathBuf> {
                 .collect();
 
             // Keep matching_part if its shorter than maybe_root
-            if matching_part.as_os_str().len() < maybe_root.as_os_str().len() {
+            let matching_len = matching_part.as_os_str().len();
+            if matching_len > 0 && matching_len < maybe_root.as_os_str().len() {
                 maybe_roots[i] = matching_part;
                 any_matches = true;
                 break;
@@ -272,4 +273,39 @@ fn path_to_cstring(path: &std::ffi::OsStr) -> Option<CString> {
     let mut null_terminated = Vec::with_capacity(bytes.len() + 1);
     null_terminated.extend_from_slice(bytes);
     CString::new(null_terminated).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_roots() {
+        let paths : Vec<PathBuf> = vec![
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\asio\\1.12.2\\asio\\system_context.hpp".into(),
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\asio\\1.12.2\\asio\\system_executor.hpp".into(),
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\asio\\1.12.2\\asio\\thread_pool.hpp".into(),
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\asio\\1.12.2\\asio\\wait_traits.hpp".into(),
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\asio\\1.12.2\\asio\\windows\\object_handle.hpp".into(),
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\asio\\1.12.2\\asio\\windows\\overlapped_handle.hpp".into(),
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\asio\\1.12.2\\asio\\windows\\random_access_handle.hpp".into(),
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\libSampleRate\\Private\\LibSampleRateModule.cpp".into(),
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\libSampleRate\\Private\\common.h".into(),
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\libSampleRate\\Private\\samplerate.cpp".into(),
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\libSampleRate\\Private\\src_linear.cpp".into(),
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\libSampleRate\\Private\\src_sinc.cpp".into(),
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\libSampleRate\\Private\\src_zoh.cpp".into(),
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\mimalloc\\include\\mimalloc-atomic.h".into(),
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\mimalloc\\include\\mimalloc-internal.h".into(),
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\mimalloc\\src\\alloc-aligned.c".into(),
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\mimalloc\\src\\alloc-posix.c".into(),
+            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\mimalloc\\src\\alloc.c".into(),
+        ];
+
+        let roots = super::find_roots(paths.iter());
+        for root in &roots {
+            println!("root: {:?}", root);
+        }
+        assert_eq!(roots.len(), 1);
+    }
 }
