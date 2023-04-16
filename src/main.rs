@@ -2,7 +2,7 @@ use anyhow::anyhow;
 use itertools::*;
 use pdb::*;
 use std::collections::HashSet;
-use std::ffi::{c_void, CString};
+use std::ffi::{c_void, CString, OsString};
 use std::path::{Path, PathBuf};
 
 use windows::Win32::System::Diagnostics::Debug as WinDbg;
@@ -10,13 +10,17 @@ use windows_sys::Win32::System::SystemServices as WinSys;
 
 fn main() {
     println!("hello world");
-    
+
+    // Define target
     let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
     //let test_target = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe";
     //let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
-    let pdbs = find_all_pdbs(&PathBuf::from(test_target));
     
-    let mut source_files : HashSet<PathBuf> = Default::default(); 
+    // Get PDBs for target
+    let pdbs = find_all_pdbs(&PathBuf::from(test_target));
+
+    // Get filepaths from PDBs
+    let mut source_files: HashSet<PathBuf> = Default::default();
     if let Ok(pdbs) = pdbs {
         for pdb in pdbs {
             if let Ok(pdb_files) = get_source_files(&pdb) {
@@ -25,10 +29,14 @@ fn main() {
         }
     }
 
-    let sorted_files : Vec<_> = source_files.iter().sorted().collect();
-    for file in sorted_files {
-
+    let sorted_files: Vec<_> = source_files.iter().sorted().collect();
+    for file in &sorted_files {
         println!("{:?}", file);
+    }
+
+    // Get roots from list of filepaths
+    for root in find_roots(sorted_files.iter()) {
+        println!("Root: {:?}", root);
     }
 
     println!("goodbye cruel world");
@@ -71,9 +79,9 @@ fn find_all_pdbs(target: &Path) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 fn get_source_files(pdb: &PathBuf) -> anyhow::Result<Vec<PathBuf>> {
-    let mut result : Vec<PathBuf> = Default::default();
+    let mut result: Vec<PathBuf> = Default::default();
 
-    // Open PDB    
+    // Open PDB
     let pdbfile = std::fs::File::open(&pdb)?;
     let mut pdb = pdb::PDB::open(pdbfile)?;
     let string_table = pdb.string_table()?;
@@ -92,8 +100,10 @@ fn get_source_files(pdb: &PathBuf) -> anyhow::Result<Vec<PathBuf>> {
                 let raw_filepath = string_table.get(file.name)?;
                 let filename_utf8 = std::str::from_utf8(raw_filepath.as_bytes())?;
                 let filepath = PathBuf::from(filename_utf8);
-                
+
                 // Verify file exists on disk
+//                let roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1".into()];
+
                 if false {
                     let file_meta = std::fs::metadata(&filepath);
                     if let Ok(meta) = file_meta {
@@ -168,6 +178,42 @@ fn get_dependencies(filename: &Path, dir: &Path) -> anyhow::Result<Vec<PathBuf>>
     }
 
     Ok(result)
+}
+
+fn find_roots<'a, I: Iterator<Item=&'a &'a PathBuf>>(paths: I) -> Vec<PathBuf> {
+    let mut maybe_roots: Vec<PathBuf> = Default::default();
+
+    // Iterate all paths
+    for path in paths {
+        // iterate all roots
+        let mut any_matches = false;
+        for i in 0..maybe_roots.len() {
+            let maybe_root = &maybe_roots[i];
+
+            // Count how many leading characters are the same
+            let matching_part: PathBuf = path
+                .components()
+                .zip(maybe_root.components())
+                .take_while(|(a, b)| a == b)
+                .map(|(a,_)| a)
+                .collect();
+
+            // Keep matching_part if its shorter than maybe_root
+            if matching_part.as_os_str().len() < maybe_root.as_os_str().len() {
+                maybe_roots[i] = matching_part;
+                any_matches = true;
+                break;
+            }
+        }
+
+        // Didn't align with anything. This is maybe a root!
+        if !any_matches {
+            maybe_roots.push(path.to_path_buf());
+        }
+    }
+
+    // Our maybe_roots are now known roots
+    maybe_roots
 }
 
 unsafe fn get_ptr_from_virtual_address(
