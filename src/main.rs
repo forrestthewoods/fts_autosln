@@ -11,9 +11,9 @@ use windows_sys::Win32::System::SystemServices as WinSys;
 fn main() {
     println!("hello world");
     
-    //let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
+    let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
     //let test_target = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe";
-    let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
+    //let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
     let pdbs = find_all_pdbs(&PathBuf::from(test_target));
     
     let mut source_files : HashSet<PathBuf> = Default::default(); 
@@ -50,6 +50,7 @@ fn find_all_pdbs(target: &Path) -> anyhow::Result<Vec<PathBuf>> {
         let pdb_metadata = std::fs::metadata(&pdb_path);
         if let Ok(meta) = pdb_metadata {
             if meta.is_file() {
+                println!("pdb: {:?}", pdb_path);
                 pdbs.push(pdb_path);
             }
         }
@@ -93,14 +94,16 @@ fn get_source_files(pdb: &PathBuf) -> anyhow::Result<Vec<PathBuf>> {
                 let filepath = PathBuf::from(filename_utf8);
                 
                 // Verify file exists on disk
-                let file_meta = std::fs::metadata(&filepath);
-                if let Ok(meta) = file_meta {
-                    if meta.is_file() {
-                        result.push(filepath);
+                if false {
+                    let file_meta = std::fs::metadata(&filepath);
+                    if let Ok(meta) = file_meta {
+                        if meta.is_file() {
+                            result.push(filepath);
+                        }
                     }
+                } else {
+                    result.push(filepath);
                 }
-
-                //result.push(filepath);
             }
         }
     }
