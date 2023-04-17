@@ -17,9 +17,9 @@ fn main() -> anyhow::Result<()> {
     let start = std::time::Instant::now();
 
     // Define target
-    //let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
+    let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
     //let test_target = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe";
-    let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
+    //let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
 
     // Get PDBs for target
     let pdbs = find_all_pdbs(&PathBuf::from(test_target))?;
@@ -123,22 +123,31 @@ fn main() -> anyhow::Result<()> {
     file.write_all(
         format!(
             "Project(\"{{{}}}\") = \"FOO\", \"FOO.vcxproj\", \"{{{}}}\"\n",
-            Uuid::new_v4(), vcxproj_id
+            Uuid::new_v4(),
+            vcxproj_id
         )
         .as_bytes(),
     )?;
     file.write_all("EndProject\n".as_bytes())?;
     file.write_all("Global\n".as_bytes())?;
-	file.write_all("    GlobalSection(SolutionConfigurationPlatforms) = preSolution\n".as_bytes())?;
-	file.write_all("    	Debug|x64 = Debug|x64\n".as_bytes())?;
-	file.write_all("    	Release|x64 = Release|x64\n".as_bytes())?;
-	file.write_all("    EndGlobalSection\n".as_bytes())?;
-	file.write_all("GlobalSection(ProjectConfigurationPlatforms) = postSolution\n".as_bytes())?;
-	file.write_all(format!("	    {{{}}}.Debug|x64.ActiveCfg = Debug|x64\n", vcxproj_id).as_bytes())?;
-	file.write_all(format!("	    {{{}}}.Debug|x64.Build.0 = Debug|x64\n", vcxproj_id).as_bytes())?;
-	file.write_all(format!("	    {{{}}}.Release|x64.ActiveCfg = Release|x64\n", vcxproj_id).as_bytes())?;
-	file.write_all(format!("	    {{{}}}.Release|x64.Build.0 = Release|x64\n", vcxproj_id).as_bytes())?;
-	file.write_all("EndGlobalSection\n".as_bytes())?;
+    file.write_all("    GlobalSection(SolutionConfigurationPlatforms) = preSolution\n".as_bytes())?;
+    file.write_all("    	Debug|x64 = Debug|x64\n".as_bytes())?;
+    file.write_all("    	Release|x64 = Release|x64\n".as_bytes())?;
+    file.write_all("    EndGlobalSection\n".as_bytes())?;
+    file.write_all("GlobalSection(ProjectConfigurationPlatforms) = postSolution\n".as_bytes())?;
+    file.write_all(format!("	    {{{}}}.Debug|x64.ActiveCfg = Debug|x64\n", vcxproj_id).as_bytes())?;
+    file.write_all(format!("	    {{{}}}.Debug|x64.Build.0 = Debug|x64\n", vcxproj_id).as_bytes())?;
+    file.write_all(
+        format!(
+            "	    {{{}}}.Release|x64.ActiveCfg = Release|x64\n",
+            vcxproj_id
+        )
+        .as_bytes(),
+    )?;
+    file.write_all(
+        format!("	    {{{}}}.Release|x64.Build.0 = Release|x64\n", vcxproj_id).as_bytes(),
+    )?;
+    file.write_all("EndGlobalSection\n".as_bytes())?;
     file.write_all("GlobalSection(ExtensibilityGlobals) = postSolution\n".as_bytes())?;
     file.write_all(format!("    SolutionGuid = {{{}}}\n", Uuid::new_v4()).as_bytes())?;
     file.write_all("EndGlobalSection\n".as_bytes())?;
@@ -148,24 +157,44 @@ fn main() -> anyhow::Result<()> {
     let mut file = std::fs::File::create("c:/temp/foo.vcxproj")?;
     file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
     file.write_all("<Project DefaultTargets=\"Build\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes())?;
+    
+    file.write_all("<ItemGroup Label=\"ProjectConfigurations\">\n".as_bytes())?;
+    file.write_all("    <ProjectConfiguration Include=\"Debug|x64\">\n".as_bytes())?;
+    file.write_all("      <Configuration>Debug</Configuration>\n".as_bytes())?;
+    file.write_all("      <Platform>x64</Platform>\n".as_bytes())?;
+    file.write_all("    </ProjectConfiguration>\n".as_bytes())?;
+    file.write_all("    <ProjectConfiguration Include=\"Release|x64\">\n".as_bytes())?;
+    file.write_all("      <Configuration>Release</Configuration>\n".as_bytes())?;
+    file.write_all("      <Platform>x64</Platform>\n".as_bytes())?;
+    file.write_all("    </ProjectConfiguration>\n".as_bytes())?;
+    file.write_all("</ItemGroup>\n".as_bytes())?;
+
     file.write_all("  <PropertyGroup Label=\"Globals\">\n".as_bytes())?;
     file.write_all("    <VCProjectVersion>16.0</VCProjectVersion>\n".as_bytes())?;
     file.write_all("    <Keyword>Win32Proj</Keyword>\n".as_bytes())?;
-    file.write_all(
-        format!("    <ProjectGuid>{{{}}}</ProjectGuid>\n", vcxproj_id).as_bytes(),
-    )?;
+    file.write_all(format!("    <ProjectGuid>{{{}}}</ProjectGuid>\n", vcxproj_id).as_bytes())?;
     file.write_all("    <RootNamespace>autoslntests</RootNamespace>\n".as_bytes())?;
     file.write_all(
         "    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>\n".as_bytes(),
     )?;
     file.write_all("  </PropertyGroup>\n".as_bytes())?;
+
+    file.write_all("<Import Project=\"$(VCTargetsPath)\\Microsoft.Cpp.Default.props\" />\n".as_bytes())?;
+    file.write_all("<Import Project=\"$(VCTargetsPath)\\Microsoft.Cpp.props\" />\n".as_bytes())?;
+    file.write_all("<Import Project=\"$(VCTargetsPath)\\Microsoft.Cpp.targets\" />\n".as_bytes())?;
+
+
     file.write_all("  <ItemGroup>\n".as_bytes())?;
     for local_file in local_files.iter().sorted() {
         if local_file.to_string_lossy().contains("Program Files") {
             continue;
         }
         let lossy_file = local_file.to_string_lossy();
-        let flavor = if lossy_file.ends_with(".cpp") { "ClCompile" } else { "ClInclude" };
+        let flavor = if lossy_file.ends_with(".cpp") {
+            "ClCompile"
+        } else {
+            "ClInclude"
+        };
         file.write_all(format!("    <{} Include={:?} />\n", flavor, lossy_file).as_bytes())?;
     }
     file.write_all("  </ItemGroup>\n".as_bytes())?;
@@ -379,8 +408,6 @@ fn path_to_cstring(path: &std::ffi::OsStr) -> Option<CString> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn do_stuff() {}
 }
