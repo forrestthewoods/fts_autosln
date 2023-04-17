@@ -1,16 +1,16 @@
 use anyhow::anyhow;
-use itertools::*;
 use pdb::*;
-use std::collections::HashSet;
+use rayon::prelude::*;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{c_void, CString};
-use std::os::windows::prelude::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use windows::Win32::System::Diagnostics::Debug as WinDbg;
 use windows_sys::Win32::System::SystemServices as WinSys;
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     println!("hello world");
+    let start = std::time::Instant::now();
 
     // Define target
     let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
@@ -18,26 +18,13 @@ fn main() {
     //let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
 
     // Get PDBs for target
-    let pdbs = find_all_pdbs(&PathBuf::from(test_target));
+    let pdbs = find_all_pdbs(&PathBuf::from(test_target))?;
 
     // Get filepaths from PDBs
-    let mut source_files: HashSet<PathBuf> = Default::default();
-    if let Ok(pdbs) = pdbs {
-        for pdb in pdbs {
-            if let Ok(pdb_files) = get_source_files(&pdb) {
-                source_files.extend(pdb_files);
-            }
-        }
-    }
-
-    for file in &source_files {
-        println!("pdb source: {:?}", file);
-    }
-    // Get roots from list of filepaths
-    // let pdb_roots = find_roots(source_files.iter());
-    // for root in &pdb_roots {
-    //     println!("Root: {:?}", root);
-    // }
+    let source_files: HashSet<PathBuf> = pdbs
+        .par_iter()
+        .flat_map(|pdb| get_source_files(&pdb).unwrap_or_default())
+        .collect();
 
     let file_exists = |path: &Path| {
         if let Ok(meta) = std::fs::metadata(&path) {
@@ -59,69 +46,71 @@ fn main() {
     };
 
     let user_roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1/".into()];
+    let mut known_maps: HashMap<PathBuf,PathBuf> = Default::default();
 
     // Find local files
-    let mut local_files: Vec<PathBuf> = Default::default();
-    let mut hack = 0;
-    for file in source_files.into_iter() {
-        println!("Trying to find file: {:?}", file);
-        // File exists on disk
-        if file_exists(&file) {
-            local_files.push(file);
-        } else {
-            // Couldn't find file. See if it exists relative to a root
-            let components: Vec<_> = file.components().collect();
-            let mut idx: i32 = components.len() as i32 - 1;
-            let mut relpath = PathBuf::new();
-            'relchecks: while idx >= 0 {
-                let comp: &Path = components[idx as usize].as_ref();
-                relpath = if relpath.as_os_str().is_empty() {
-                    comp.to_path_buf()
-                } else {
-                    comp.join(&relpath)
-                };
-
-                for user_root in &user_roots {
-                    let maybe_filepath = user_root.join(&relpath);
-                    //println!("    {:?}", maybe_filepath);
-                    if file_exists(&maybe_filepath) {
-                        local_files.push(maybe_filepath);
-                        break 'relchecks;
-                    }
-                }
-
-                idx -= 1;
-            }
-
-            /*
-            for pdb_root in &pdb_roots {
-                if lower_file.starts_with(pdb_root) {
-                    // Replace pdb_root with user_root
-                    let num_pdb_parts = pdb_root.components().count();
-                    let relpath : PathBuf = lower_file.components().skip(num_pdb_parts).collect();
-
-                    for user_root in &user_roots {
-                        let maybe_filepath = user_root.join(&relpath);
+    let local_files: Vec<PathBuf> = source_files
+        //.into_par_iter()
+        .into_iter()
+        .filter_map(|file| {
+            if file_exists(&file) {
+                return Some(file);
+            } else {
+                // See if a known map applies 
+                for (src, dst) in &known_maps {
+                    if file.starts_with(src) {
+                        let tail = file.strip_prefix(src).ok()?;
+                        let maybe_filepath = dst.join(tail);
                         if file_exists(&maybe_filepath) {
-                            local_files.push(maybe_filepath);
+                            //println!("it helped!");
+                            return Some(maybe_filepath.to_owned());
                         }
                     }
                 }
+
+                // Couldn't find file. See if it exists relative to a root
+                let components: Vec<_> = file.components().collect();
+                let mut idx: i32 = components.len() as i32 - 1;
+                let mut relpath = PathBuf::new();
+                while idx >= 0 {
+                    let comp: &Path = components[idx as usize].as_ref();
+                    relpath = if relpath.as_os_str().is_empty() {
+                        comp.to_path_buf()
+                    } else {
+                        comp.join(&relpath)
+                    };
+
+                    for user_root in &user_roots {
+                        let maybe_filepath = user_root.join(&relpath);
+                        //println!("    {:?}", maybe_filepath);
+                        if file_exists(&maybe_filepath) {
+                            // create a new known map
+                            let pdb_path : PathBuf = components.iter().take(idx as usize).collect();
+                            //println!("inserting {:?}, {:?}", pdb_path, user_root);
+                            known_maps.insert(pdb_path, user_root.to_owned());
+
+                            return Some(maybe_filepath);
+                        }
+                    }
+
+                    idx -= 1;
+                }
+
+                None
             }
-            */
-        }
+        })
+        .collect();
 
-        // hack += 1;
-        // if hack > 10 {
-        //     break;
-        // }
-    }
+    // for local_file in local_files.iter().sorted() {
+    //     println!("localfile: {:?}", local_file);
+    // }
 
-    for local_file in local_files {
-        println!("localfile: {:?}", local_file);
-    }
 
+    let end = std::time::Instant::now();
+    println!("Elapsed Milliseconds: {}", (end - start).as_millis());
     println!("goodbye cruel world");
+
+    Ok(())
 }
 
 fn find_all_pdbs(target: &Path) -> anyhow::Result<Vec<PathBuf>> {
@@ -262,70 +251,6 @@ fn get_dependencies(filename: &Path, dir: &Path) -> anyhow::Result<Vec<PathBuf>>
     Ok(result)
 }
 
-fn find_roots<'a, I: Iterator<Item = &'a PathBuf>>(paths: I) -> Vec<PathBuf> {
-    // bool is if its been "shortened" at least once
-    let mut maybe_roots: Vec<(PathBuf, bool)> = Default::default();
-
-    // Iterate all paths
-    for path in paths {
-        // Lowercase
-        let path: PathBuf = path.as_os_str().to_ascii_lowercase().into();
-
-        // iterate all roots
-        let mut any_matches = false;
-        for i in 0..maybe_roots.len() {
-            let maybe_root = &maybe_roots[i].0;
-
-            // Count how many leading characters are the same
-            let matching_part: PathBuf = path
-                .components()
-                .zip(maybe_root.components())
-                .take_while(|(a, b)| a == b)
-                .map(|(a, _)| a)
-                .collect();
-
-            // Do nothing if matching part is already root
-            if matching_part == *maybe_root {
-                any_matches = true;
-                break;
-            }
-
-            // Ignore drive letters
-            let os_str = matching_part.as_os_str();
-            let matching_len = os_str.len();
-            if matching_len == 3 {
-                let a = os_str.encode_wide().nth(1).unwrap();
-                let b = os_str.encode_wide().nth(2).unwrap();
-
-                let sep = ":".encode_utf16().nth(0).unwrap();
-                let slash_a = "\\".encode_utf16().nth(0).unwrap();
-                let slash_b = "/".encode_utf16().nth(0).unwrap();
-                if a == sep && (b == slash_a || b == slash_b) {
-                    continue;
-                }
-            }
-
-            // This matching part may be shorter
-            if matching_len > 0 && matching_len < maybe_root.as_os_str().len() {
-                maybe_roots[i] = (matching_part, true);
-                any_matches = true;
-                break;
-            }
-        }
-
-        // Didn't align with anything. This is maybe a root!
-        if !any_matches {
-            maybe_roots.push((path.to_path_buf(), false));
-        }
-    }
-
-    // Our maybe_roots are now known roots
-    maybe_roots
-        .into_iter()
-        .filter_map(|(path, shortened)| if shortened { Some(path) } else { None })
-        .collect()
-}
-
 unsafe fn get_ptr_from_virtual_address(
     addr: u32,
     image_header: *const WinDbg::IMAGE_NT_HEADERS64,
@@ -389,32 +314,5 @@ mod tests {
     use super::*;
 
     #[test]
-    fn find_roots() {
-        let paths : Vec<PathBuf> = vec![
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\asio\\1.12.2\\asio\\system_context.hpp".into(),
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\asio\\1.12.2\\asio\\system_executor.hpp".into(),
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\asio\\1.12.2\\asio\\thread_pool.hpp".into(),
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\asio\\1.12.2\\asio\\wait_traits.hpp".into(),
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\asio\\1.12.2\\asio\\windows\\object_handle.hpp".into(),
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\asio\\1.12.2\\asio\\windows\\overlapped_handle.hpp".into(),
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\asio\\1.12.2\\asio\\windows\\random_access_handle.hpp".into(),
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\libSampleRate\\Private\\LibSampleRateModule.cpp".into(),
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\libSampleRate\\Private\\common.h".into(),
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\libSampleRate\\Private\\samplerate.cpp".into(),
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\libSampleRate\\Private\\src_linear.cpp".into(),
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\libSampleRate\\Private\\src_sinc.cpp".into(),
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\libSampleRate\\Private\\src_zoh.cpp".into(),
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\mimalloc\\include\\mimalloc-atomic.h".into(),
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\mimalloc\\include\\mimalloc-internal.h".into(),
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\mimalloc\\src\\alloc-aligned.c".into(),
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\mimalloc\\src\\alloc-posix.c".into(),
-            "D:\\build\\++UE5\\Sync\\Engine\\Source\\ThirdParty\\mimalloc\\src\\alloc.c".into(),
-        ];
-
-        let roots = super::find_roots(paths.iter());
-        for root in &roots {
-            println!("root: {:?}", root);
-        }
-        assert_eq!(roots.len(), 1);
-    }
+    fn do_stuff() {}
 }
