@@ -1,9 +1,11 @@
 use anyhow::anyhow;
+use dashmap::DashMap;
 use pdb::*;
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ffi::{c_void, CString};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use windows::Win32::System::Diagnostics::Debug as WinDbg;
 use windows_sys::Win32::System::SystemServices as WinSys;
@@ -46,18 +48,20 @@ fn main() -> anyhow::Result<()> {
     };
 
     let user_roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1/".into()];
-    let mut known_maps: HashMap<PathBuf,PathBuf> = Default::default();
+    let known_maps: Arc<DashMap<PathBuf, PathBuf>> = Default::default();
 
     // Find local files
     let local_files: Vec<PathBuf> = source_files
-        //.into_par_iter()
-        .into_iter()
+        .into_par_iter()
         .filter_map(|file| {
             if file_exists(&file) {
                 return Some(file);
             } else {
-                // See if a known map applies 
-                for (src, dst) in &known_maps {
+                // See if a known map applies
+                for kvp in known_maps.iter() {
+                    let src = kvp.key();
+                    let dst = kvp.value();
+
                     if file.starts_with(src) {
                         let tail = file.strip_prefix(src).ok()?;
                         let maybe_filepath = dst.join(tail);
@@ -85,7 +89,7 @@ fn main() -> anyhow::Result<()> {
                         //println!("    {:?}", maybe_filepath);
                         if file_exists(&maybe_filepath) {
                             // create a new known map
-                            let pdb_path : PathBuf = components.iter().take(idx as usize).collect();
+                            let pdb_path: PathBuf = components.iter().take(idx as usize).collect();
                             //println!("inserting {:?}, {:?}", pdb_path, user_root);
                             known_maps.insert(pdb_path, user_root.to_owned());
 
@@ -104,7 +108,6 @@ fn main() -> anyhow::Result<()> {
     // for local_file in local_files.iter().sorted() {
     //     println!("localfile: {:?}", local_file);
     // }
-
 
     let end = std::time::Instant::now();
     println!("Elapsed Milliseconds: {}", (end - start).as_millis());

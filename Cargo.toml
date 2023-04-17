@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.70"
+dashmap = "5.4.0"
 itertools = "0.10.5"
 rayon = "1.7.0"
 pdb = "0.8.0"
