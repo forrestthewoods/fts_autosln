@@ -119,16 +119,30 @@ fn main() -> anyhow::Result<()> {
     file.write_all("VisualStudioVersion = 17.5.33424.131\n".as_bytes())?;
     file.write_all("MinimumVisualStudioVersion = 10.0.40219.1\n".as_bytes())?;
 
-    let sln_id = Uuid::new_v4();
     let vcxproj_id = Uuid::new_v4();
     file.write_all(
         format!(
-            "Project(\"{}\") = \"FOO\", \"FOO.vcxproj\", \"{}\"\n",
-            sln_id, vcxproj_id
+            "Project(\"{{{}}}\") = \"FOO\", \"FOO.vcxproj\", \"{{{}}}\"\n",
+            Uuid::new_v4(), vcxproj_id
         )
         .as_bytes(),
     )?;
     file.write_all("EndProject\n".as_bytes())?;
+    file.write_all("Global\n".as_bytes())?;
+	file.write_all("    GlobalSection(SolutionConfigurationPlatforms) = preSolution\n".as_bytes())?;
+	file.write_all("    	Debug|x64 = Debug|x64\n".as_bytes())?;
+	file.write_all("    	Release|x64 = Release|x64\n".as_bytes())?;
+	file.write_all("    EndGlobalSection\n".as_bytes())?;
+	file.write_all("GlobalSection(ProjectConfigurationPlatforms) = postSolution\n".as_bytes())?;
+	file.write_all(format!("	    {{{}}}.Debug|x64.ActiveCfg = Debug|x64\n", vcxproj_id).as_bytes())?;
+	file.write_all(format!("	    {{{}}}.Debug|x64.Build.0 = Debug|x64\n", vcxproj_id).as_bytes())?;
+	file.write_all(format!("	    {{{}}}.Release|x64.ActiveCfg = Release|x64\n", vcxproj_id).as_bytes())?;
+	file.write_all(format!("	    {{{}}}.Release|x64.Build.0 = Release|x64\n", vcxproj_id).as_bytes())?;
+	file.write_all("EndGlobalSection\n".as_bytes())?;
+    file.write_all("GlobalSection(ExtensibilityGlobals) = postSolution\n".as_bytes())?;
+    file.write_all(format!("    SolutionGuid = {{{}}}\n", Uuid::new_v4()).as_bytes())?;
+    file.write_all("EndGlobalSection\n".as_bytes())?;
+    file.write_all("EndGlobal\n".as_bytes())?;
 
     // Write vcxproj
     let mut file = std::fs::File::create("c:/temp/foo.vcxproj")?;
@@ -138,7 +152,7 @@ fn main() -> anyhow::Result<()> {
     file.write_all("    <VCProjectVersion>16.0</VCProjectVersion>\n".as_bytes())?;
     file.write_all("    <Keyword>Win32Proj</Keyword>\n".as_bytes())?;
     file.write_all(
-        "    <ProjectGuid>{fc6bebf0-51e7-4970-a0a0-1db7f189ec58}</ProjectGuid>\n".as_bytes(),
+        format!("    <ProjectGuid>{{{}}}</ProjectGuid>\n", vcxproj_id).as_bytes(),
     )?;
     file.write_all("    <RootNamespace>autoslntests</RootNamespace>\n".as_bytes())?;
     file.write_all(
@@ -146,7 +160,6 @@ fn main() -> anyhow::Result<()> {
     )?;
     file.write_all("  </PropertyGroup>\n".as_bytes())?;
     file.write_all("  <ItemGroup>\n".as_bytes())?;
-    let cpp_ext: PathBuf = ".cpp".into();
     for local_file in local_files.iter().sorted() {
         if local_file.to_string_lossy().contains("Program Files") {
             continue;
