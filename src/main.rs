@@ -30,11 +30,9 @@ fn main() {
         }
     }
 
-    // let sorted_files: Vec<_> = source_files.iter().sorted().collect();
-    // for file in &sorted_files {
-    //     println!("{:?}", file);
-    // }
-
+    for file in &source_files {
+        println!("{:?}", file);
+    }
     // Get roots from list of filepaths
     let pdb_roots = find_roots(source_files.iter());
     for root in &pdb_roots {
@@ -60,7 +58,7 @@ fn main() {
         return false;
     };
 
-    let user_roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1".into()];
+    let user_roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1/".into()];
 
     // Find local files
     let mut local_files : Vec<PathBuf> = Default::default();
@@ -74,10 +72,23 @@ fn main() {
             // Couldn't find file. Let's try changing roots
             for pdb_root in &pdb_roots {
                 if lower_file.starts_with(pdb_root) {
-                    // Replace pdb_root
+                    // Replace pdb_root with user_root
+                    let num_pdb_parts = pdb_root.components().count();
+                    let relpath : PathBuf = lower_file.components().skip(num_pdb_parts).collect();
+
+                    for user_root in &user_roots {
+                        let maybe_filepath = user_root.join(&relpath);
+                        if file_exists(&maybe_filepath) {
+                            local_files.push(maybe_filepath);
+                        }
+                    }
                 }
             }
         }
+    }
+
+    for local_file in local_files {
+        println!("localfile: {:?}", local_file);
     }
 
     println!("goodbye cruel world");
