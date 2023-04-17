@@ -1,12 +1,14 @@
 use anyhow::anyhow;
 use dashmap::DashMap;
+use itertools::Itertools;
 use pdb::*;
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::ffi::{c_void, CString};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
+use uuid::Uuid;
 use windows::Win32::System::Diagnostics::Debug as WinDbg;
 use windows_sys::Win32::System::SystemServices as WinSys;
 
@@ -15,9 +17,9 @@ fn main() -> anyhow::Result<()> {
     let start = std::time::Instant::now();
 
     // Define target
-    let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
+    //let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
     //let test_target = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe";
-    //let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
+    let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
 
     // Get PDBs for target
     let pdbs = find_all_pdbs(&PathBuf::from(test_target))?;
@@ -108,6 +110,56 @@ fn main() -> anyhow::Result<()> {
     // for local_file in local_files.iter().sorted() {
     //     println!("localfile: {:?}", local_file);
     // }
+
+    // Write solution
+    let mut file = std::fs::File::create("c:/temp/foo.sln")?;
+    file.write_all("\n".as_bytes())?; // empty newline
+    file.write_all("Microsoft Visual Studio Solution File, Format Version 12.00\n".as_bytes())?;
+    file.write_all("# Visual Studio Version 17\n".as_bytes())?;
+    file.write_all("VisualStudioVersion = 17.5.33424.131\n".as_bytes())?;
+    file.write_all("MinimumVisualStudioVersion = 10.0.40219.1\n".as_bytes())?;
+
+    let sln_id = Uuid::new_v4();
+    let vcxproj_id = Uuid::new_v4();
+    file.write_all(
+        format!(
+            "Project(\"{}\") = \"FOO\", \"FOO.vcxproj\", \"{}\"\n",
+            sln_id, vcxproj_id
+        )
+        .as_bytes(),
+    )?;
+    file.write_all("EndProject\n".as_bytes())?;
+
+    // Write vcxproj
+    let mut file = std::fs::File::create("c:/temp/foo.vcxproj")?;
+    file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
+    file.write_all("<Project DefaultTargets=\"Build\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes())?;
+    file.write_all("  <PropertyGroup Label=\"Globals\">\n".as_bytes())?;
+    file.write_all("    <VCProjectVersion>16.0</VCProjectVersion>\n".as_bytes())?;
+    file.write_all("    <Keyword>Win32Proj</Keyword>\n".as_bytes())?;
+    file.write_all(
+        "    <ProjectGuid>{fc6bebf0-51e7-4970-a0a0-1db7f189ec58}</ProjectGuid>\n".as_bytes(),
+    )?;
+    file.write_all("    <RootNamespace>autoslntests</RootNamespace>\n".as_bytes())?;
+    file.write_all(
+        "    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>\n".as_bytes(),
+    )?;
+    file.write_all("  </PropertyGroup>\n".as_bytes())?;
+    file.write_all("  <ItemGroup>\n".as_bytes())?;
+    let cpp_ext: PathBuf = ".cpp".into();
+    for local_file in local_files.iter().sorted() {
+        if local_file.to_string_lossy().contains("Program Files") {
+            continue;
+        }
+        let lossy_file = local_file.to_string_lossy();
+        let flavor = if lossy_file.ends_with(".cpp") { "ClCompile" } else { "ClInclude" };
+        file.write_all(format!("    <{} Include={:?} />\n", flavor, lossy_file).as_bytes())?;
+    }
+    file.write_all("  </ItemGroup>\n".as_bytes())?;
+    file.write_all("</Project>\n".as_bytes())?;
+
+    // let mut writer = xml::EmitterConfig::new().perform_indent(true).create_writer(&mut file);
+    // xml::writer::XmlEvent::
 
     let end = std::time::Instant::now();
     println!("Elapsed Milliseconds: {}", (end - start).as_millis());
