@@ -31,13 +31,13 @@ fn main() {
     }
 
     for file in &source_files {
-        println!("{:?}", file);
+        println!("pdb source: {:?}", file);
     }
     // Get roots from list of filepaths
-    let pdb_roots = find_roots(source_files.iter());
-    for root in &pdb_roots {
-        println!("Root: {:?}", root);
-    }
+    // let pdb_roots = find_roots(source_files.iter());
+    // for root in &pdb_roots {
+    //     println!("Root: {:?}", root);
+    // }
 
     let file_exists = |path: &Path| {
         if let Ok(meta) = std::fs::metadata(&path) {
@@ -61,15 +61,39 @@ fn main() {
     let user_roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1/".into()];
 
     // Find local files
-    let mut local_files : Vec<PathBuf> = Default::default();
+    let mut local_files: Vec<PathBuf> = Default::default();
+    let mut hack = 0;
     for file in source_files.into_iter() {
+        println!("Trying to find file: {:?}", file);
         // File exists on disk
         if file_exists(&file) {
             local_files.push(file);
         } else {
-            let lower_file : PathBuf = file.as_os_str().to_ascii_lowercase().into();
+            // Couldn't find file. See if it exists relative to a root
+            let components: Vec<_> = file.components().collect();
+            let mut idx: i32 = components.len() as i32 - 1;
+            let mut relpath = PathBuf::new();
+            'relchecks: while idx >= 0 {
+                let comp: &Path = components[idx as usize].as_ref();
+                relpath = if relpath.as_os_str().is_empty() {
+                    comp.to_path_buf()
+                } else {
+                    comp.join(&relpath)
+                };
 
-            // Couldn't find file. Let's try changing roots
+                for user_root in &user_roots {
+                    let maybe_filepath = user_root.join(&relpath);
+                    //println!("    {:?}", maybe_filepath);
+                    if file_exists(&maybe_filepath) {
+                        local_files.push(maybe_filepath);
+                        break 'relchecks;
+                    }
+                }
+
+                idx -= 1;
+            }
+
+            /*
             for pdb_root in &pdb_roots {
                 if lower_file.starts_with(pdb_root) {
                     // Replace pdb_root with user_root
@@ -84,7 +108,13 @@ fn main() {
                     }
                 }
             }
+            */
         }
+
+        // hack += 1;
+        // if hack > 10 {
+        //     break;
+        // }
     }
 
     for local_file in local_files {
@@ -239,7 +269,7 @@ fn find_roots<'a, I: Iterator<Item = &'a PathBuf>>(paths: I) -> Vec<PathBuf> {
     // Iterate all paths
     for path in paths {
         // Lowercase
-        let path : PathBuf = path.as_os_str().to_ascii_lowercase().into();
+        let path: PathBuf = path.as_os_str().to_ascii_lowercase().into();
 
         // iterate all roots
         let mut any_matches = false;
