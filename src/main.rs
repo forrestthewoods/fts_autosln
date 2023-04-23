@@ -17,18 +17,15 @@ fn main() -> anyhow::Result<()> {
     let start = std::time::Instant::now();
 
     // Define target
-    let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
+    //let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
     //let test_target = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe";
-    //let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
+    let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
 
     // Get PDBs for target
     let pdbs = find_all_pdbs(&PathBuf::from(test_target))?;
 
     // Get filepaths from PDBs
-    let source_files: HashSet<PathBuf> = pdbs
-        .par_iter()
-        .flat_map(|pdb| get_source_files(&pdb).unwrap_or_default())
-        .collect();
+    let source_files: HashSet<PathBuf> = pdbs.par_iter().flat_map(|pdb| get_source_files(&pdb).unwrap_or_default()).collect();
 
     let file_exists = |path: &Path| {
         if let Ok(meta) = std::fs::metadata(&path) {
@@ -137,16 +134,8 @@ fn main() -> anyhow::Result<()> {
     file.write_all("GlobalSection(ProjectConfigurationPlatforms) = postSolution\n".as_bytes())?;
     file.write_all(format!("	    {{{}}}.Debug|x64.ActiveCfg = Debug|x64\n", vcxproj_id).as_bytes())?;
     file.write_all(format!("	    {{{}}}.Debug|x64.Build.0 = Debug|x64\n", vcxproj_id).as_bytes())?;
-    file.write_all(
-        format!(
-            "	    {{{}}}.Release|x64.ActiveCfg = Release|x64\n",
-            vcxproj_id
-        )
-        .as_bytes(),
-    )?;
-    file.write_all(
-        format!("	    {{{}}}.Release|x64.Build.0 = Release|x64\n", vcxproj_id).as_bytes(),
-    )?;
+    file.write_all(format!("	    {{{}}}.Release|x64.ActiveCfg = Release|x64\n", vcxproj_id).as_bytes())?;
+    file.write_all(format!("	    {{{}}}.Release|x64.Build.0 = Release|x64\n", vcxproj_id).as_bytes())?;
     file.write_all("EndGlobalSection\n".as_bytes())?;
     file.write_all("GlobalSection(ExtensibilityGlobals) = postSolution\n".as_bytes())?;
     file.write_all(format!("    SolutionGuid = {{{}}}\n", Uuid::new_v4()).as_bytes())?;
@@ -157,7 +146,7 @@ fn main() -> anyhow::Result<()> {
     let mut file = std::fs::File::create("c:/temp/foo.vcxproj")?;
     file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
     file.write_all("<Project DefaultTargets=\"Build\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes())?;
-    
+
     file.write_all("<ItemGroup Label=\"ProjectConfigurations\">\n".as_bytes())?;
     file.write_all("    <ProjectConfiguration Include=\"Debug|x64\">\n".as_bytes())?;
     file.write_all("      <Configuration>Debug</Configuration>\n".as_bytes())?;
@@ -174,15 +163,12 @@ fn main() -> anyhow::Result<()> {
     file.write_all("    <Keyword>Win32Proj</Keyword>\n".as_bytes())?;
     file.write_all(format!("    <ProjectGuid>{{{}}}</ProjectGuid>\n", vcxproj_id).as_bytes())?;
     file.write_all("    <RootNamespace>autoslntests</RootNamespace>\n".as_bytes())?;
-    file.write_all(
-        "    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>\n".as_bytes(),
-    )?;
+    file.write_all("    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>\n".as_bytes())?;
     file.write_all("  </PropertyGroup>\n".as_bytes())?;
 
     file.write_all("<Import Project=\"$(VCTargetsPath)\\Microsoft.Cpp.Default.props\" />\n".as_bytes())?;
     file.write_all("<Import Project=\"$(VCTargetsPath)\\Microsoft.Cpp.props\" />\n".as_bytes())?;
     file.write_all("<Import Project=\"$(VCTargetsPath)\\Microsoft.Cpp.targets\" />\n".as_bytes())?;
-
 
     file.write_all("  <ItemGroup>\n".as_bytes())?;
     for local_file in local_files.iter().sorted() {
@@ -190,11 +176,7 @@ fn main() -> anyhow::Result<()> {
             continue;
         }
         let lossy_file = local_file.to_string_lossy();
-        let flavor = if lossy_file.ends_with(".cpp") {
-            "ClCompile"
-        } else {
-            "ClInclude"
-        };
+        let flavor = if lossy_file.ends_with(".cpp") { "ClCompile" } else { "ClInclude" };
         file.write_all(format!("    <{} Include={:?} />\n", flavor, lossy_file).as_bytes())?;
     }
     file.write_all("  </ItemGroup>\n".as_bytes())?;
@@ -290,12 +272,8 @@ fn get_source_files(pdb: &PathBuf) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 fn split_filepath(path: &Path) -> anyhow::Result<(PathBuf, PathBuf)> {
-    let filename = path
-        .file_name()
-        .ok_or_else(|| anyhow!("Couldn't get filename from {:?}", path))?;
-    let dir = path
-        .parent()
-        .ok_or_else(|| anyhow!("Couldn't get parent from {:?}", path))?;
+    let filename = path.file_name().ok_or_else(|| anyhow!("Couldn't get filename from {:?}", path))?;
+    let dir = path.parent().ok_or_else(|| anyhow!("Couldn't get parent from {:?}", path))?;
 
     Ok((filename.into(), dir.into()))
 }
@@ -326,17 +304,14 @@ fn get_dependencies(filename: &Path, dir: &Path) -> anyhow::Result<Vec<PathBuf>>
             let virtual_address = optional_header.DataDirectory[1].VirtualAddress;
 
             let mut import_desc =
-                get_ptr_from_virtual_address(virtual_address, file_header, mapped_address)
-                    as *const WinSys::IMAGE_IMPORT_DESCRIPTOR;
+                get_ptr_from_virtual_address(virtual_address, file_header, mapped_address) as *const WinSys::IMAGE_IMPORT_DESCRIPTOR;
 
             loop {
                 if (*import_desc).TimeDateStamp == 0 && (*import_desc).Name == 0 {
                     break;
                 }
 
-                let name_ptr =
-                    get_ptr_from_virtual_address((*import_desc).Name, file_header, mapped_address)
-                        as *const i8;
+                let name_ptr = get_ptr_from_virtual_address((*import_desc).Name, file_header, mapped_address) as *const i8;
 
                 let name = std::ffi::CStr::from_ptr(name_ptr).to_str()?;
                 result.push(name.into());
@@ -363,10 +338,7 @@ unsafe fn get_ptr_from_virtual_address(
     mapped_address.offset(offset) as *const c_void
 }
 
-unsafe fn get_enclosing_section_header(
-    addr: u32,
-    image_header: *const WinDbg::IMAGE_NT_HEADERS64,
-) -> *const WinDbg::IMAGE_SECTION_HEADER {
+unsafe fn get_enclosing_section_header(addr: u32, image_header: *const WinDbg::IMAGE_NT_HEADERS64) -> *const WinDbg::IMAGE_SECTION_HEADER {
     // Not sure how do replicate this macro in rust
     // so offset is hardcoded
     //#define IMAGE_FIRST_SECTION( ntheader ) ((PIMAGE_SECTION_HEADER)        \
