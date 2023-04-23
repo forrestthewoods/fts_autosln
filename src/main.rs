@@ -26,9 +26,9 @@ fn main() -> anyhow::Result<()> {
 
 fn sln_from_exe() -> anyhow::Result<()> {
     // Define target
-    //let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
-    //let test_target = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe";
-    let test_target : PathBuf = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe".into();
+    let test_target : PathBuf = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe".into();
+    //let test_target : PathBuf = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe".into();
+    //let test_target : PathBuf = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe".into();
 
     let user_roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1/".into()];
     let exclude_dirs: Vec<String> = ["Visual Studio".into(), "Windows Kits".into()].into_iter().collect();
@@ -52,7 +52,8 @@ fn sln_from_exe() -> anyhow::Result<()> {
 
             for filepath in pdb_files {
                 // Don't process the same paths over and over
-                let inserted = processed_paths.insert(filepath.to_string_lossy().to_string());
+                let lowerpath = filepath.to_string_lossy().to_ascii_lowercase();
+                let inserted = processed_paths.insert(lowerpath);
                 if !inserted {
                     continue;
                 }
@@ -83,6 +84,7 @@ fn sln_from_exe() -> anyhow::Result<()> {
         .flat_map(|(_, headers, _)| headers.iter())
         .sorted_by_cached_key(|filepath| filepath.file_stem().unwrap())
         .cloned()
+        .unique_by(|path| path.to_string_lossy().to_ascii_lowercase())
         .collect();
 
     let source_files: HashMap<PathBuf, Vec<PathBuf>> = stuff
@@ -235,20 +237,6 @@ fn sln_from_exe() -> anyhow::Result<()> {
     }
     file.write_all("  </ItemGroup>\n".as_bytes())?;
     file.write_all("</Project>\n".as_bytes())?;
-
-    // Write vcxproj.user
-    // println!("Writing vcxproj.user");
-    // let mut file = std::fs::File::create("c:/temp/foo/foo.vcxproj.user")?;
-    // file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
-    // file.write_all(
-    //     "<Project ToolsVersion=\"Current\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes(),
-    // )?;
-    // file.write_all("  <PropertyGroup Condition=\"'$(Configuration)|$(Platform)'=='Release|x64'\">\n".as_bytes())?;
-    // file.write_all(format!("    <LocalDebuggerCommand>{test_target}</LocalDebuggerCommand>\n").as_bytes())?;
-    // file.write_all("    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>\n".as_bytes())?;
-    // file.write_all("  </PropertyGroup>\n".as_bytes())?;
-
-    // file.write_all("</Project>\n".as_bytes())?;
 
     // Success!
     Ok(())
