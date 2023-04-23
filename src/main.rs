@@ -3,7 +3,7 @@ use dashmap::DashMap;
 use itertools::Itertools;
 use pdb::*;
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{c_void, CString};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -21,92 +21,42 @@ fn main() -> anyhow::Result<()> {
     //let test_target = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe";
     let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
 
+    let user_roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1/".into()];
+    
     // Get PDBs for target
     let pdbs = find_all_pdbs(&PathBuf::from(test_target))?;
 
     // Get filepaths from PDBs
-    let source_files: HashSet<PathBuf> = pdbs.par_iter().flat_map(|pdb| get_source_files(&pdb).unwrap_or_default()).collect();
+    let source_files: HashSet<PathBuf> = pdbs
+        .par_iter()
+        .flat_map(|pdb| get_source_files(&pdb).unwrap_or_default())
+        .collect();
 
-    let file_exists = |path: &Path| {
-        if let Ok(meta) = std::fs::metadata(&path) {
-            if meta.is_file() {
-                return true;
-            } else if meta.is_symlink() {
-                // Follow symlink
-                if let Ok(real_path) = std::fs::read_link(&path) {
-                    if let Ok(meta) = std::fs::metadata(&real_path) {
-                        if meta.is_file() {
-                            return true;
-                        }
-                    }
+    let mut headers: HashSet<PathBuf> = Default::default();
+    let mut source_files2: HashMap<PathBuf, HashSet<PathBuf>> = Default::default();
+    let known_maps: Arc<DashMap<PathBuf, PathBuf>> = Default::default();
+
+    for pdb in &pdbs {
+        let files = get_source_files(pdb).unwrap_or_default();
+        let files_entry = &mut source_files2.entry(pdb.clone()).or_default();
+        for file in files {
+            if let Some(local_file) = to_local_file(file, &user_roots, known_maps.clone()) {
+                let ext = local_file.extension().unwrap_or_default();
+                if ext == "h" || ext == "hpp" {
+                    headers.insert(local_file);
+                } else {
+                    files_entry.insert(local_file);
                 }
             }
         }
+    }
 
-        return false;
-    };
-
-    let user_roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1/".into()];
-    let known_maps: Arc<DashMap<PathBuf, PathBuf>> = Default::default();
 
     // Find local files
     let local_files: Vec<PathBuf> = source_files
         .into_par_iter()
-        .filter_map(|file| {
-            if file_exists(&file) {
-                return Some(file);
-            } else {
-                // See if a known map applies
-                for kvp in known_maps.iter() {
-                    let src = kvp.key();
-                    let dst = kvp.value();
-
-                    if file.starts_with(src) {
-                        let tail = file.strip_prefix(src).ok()?;
-                        let maybe_filepath = dst.join(tail);
-                        if file_exists(&maybe_filepath) {
-                            //println!("it helped!");
-                            return Some(maybe_filepath.to_owned());
-                        }
-                    }
-                }
-
-                // Couldn't find file. See if it exists relative to a root
-                let components: Vec<_> = file.components().collect();
-                let mut idx: i32 = components.len() as i32 - 1;
-                let mut relpath = PathBuf::new();
-                while idx >= 0 {
-                    let comp: &Path = components[idx as usize].as_ref();
-                    relpath = if relpath.as_os_str().is_empty() {
-                        comp.to_path_buf()
-                    } else {
-                        comp.join(&relpath)
-                    };
-
-                    for user_root in &user_roots {
-                        let maybe_filepath = user_root.join(&relpath);
-                        //println!("    {:?}", maybe_filepath);
-                        if file_exists(&maybe_filepath) {
-                            // create a new known map
-                            let pdb_path: PathBuf = components.iter().take(idx as usize).collect();
-                            //println!("inserting {:?}, {:?}", pdb_path, user_root);
-                            known_maps.insert(pdb_path, user_root.to_owned());
-
-                            return Some(maybe_filepath);
-                        }
-                    }
-
-                    idx -= 1;
-                }
-
-                None
-            }
-        })
+        .filter_map(|file| to_local_file(file, &user_roots, known_maps.clone()))
         .collect();
-
-    // for local_file in local_files.iter().sorted() {
-    //     println!("localfile: {:?}", local_file);
-    // }
 
     // Write solution
     let mut file = std::fs::File::create("c:/temp/foo.sln")?;
@@ -145,7 +95,9 @@ fn main() -> anyhow::Result<()> {
     // Write vcxproj
     let mut file = std::fs::File::create("c:/temp/foo.vcxproj")?;
     file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
-    file.write_all("<Project DefaultTargets=\"Build\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes())?;
+    file.write_all(
+        "<Project DefaultTargets=\"Build\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes(),
+    )?;
 
     file.write_all("<ItemGroup Label=\"ProjectConfigurations\">\n".as_bytes())?;
     file.write_all("    <ProjectConfiguration Include=\"Debug|x64\">\n".as_bytes())?;
@@ -171,25 +123,137 @@ fn main() -> anyhow::Result<()> {
     file.write_all("<Import Project=\"$(VCTargetsPath)\\Microsoft.Cpp.targets\" />\n".as_bytes())?;
 
     file.write_all("  <ItemGroup>\n".as_bytes())?;
+
+    let excludes: Vec<String> = ["Visual Studio".into(), "Windows Kits".into()].into_iter().collect();
     for local_file in local_files.iter().sorted() {
-        if local_file.to_string_lossy().contains("Program Files") {
+        let lossy_file = local_file.to_string_lossy();
+        if excludes.iter().any(|exclude| lossy_file.contains(exclude)) {
             continue;
         }
         let lossy_file = local_file.to_string_lossy();
-        let flavor = if lossy_file.ends_with(".cpp") { "ClCompile" } else { "ClInclude" };
+        let flavor = if lossy_file.ends_with(".cpp") {
+            "ClCompile"
+        } else {
+            "ClInclude"
+        };
         file.write_all(format!("    <{} Include={:?} />\n", flavor, lossy_file).as_bytes())?;
     }
     file.write_all("  </ItemGroup>\n".as_bytes())?;
     file.write_all("</Project>\n".as_bytes())?;
 
-    // let mut writer = xml::EmitterConfig::new().perform_indent(true).create_writer(&mut file);
-    // xml::writer::XmlEvent::
+    // Write vcxproj.filters
+    let mut file = std::fs::File::create("c:/temp/foo.vcxproj.filters")?;
+    file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
+    file.write_all(
+        "<Project ToolsVersion=\"4.0\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes(),
+    )?;
+    file.write_all("  <ItemGroup>\n".as_bytes())?;
+
+    for local_file in local_files.iter().sorted() {
+        if local_file.to_string_lossy().contains("Program Files") {
+            continue;
+        }
+        let lossy_file = local_file.to_string_lossy();
+        let flavor = if lossy_file.ends_with(".cpp") {
+            "ClCompile"
+        } else {
+            "ClInclude"
+        };
+        file.write_all(format!("    <{} Include={:?}>\n", flavor, lossy_file).as_bytes())?;
+        file.write_all(format!("      <Filter>Ham/Eggs</Filter>\n").as_bytes())?;
+        file.write_all(format!("    </{}>\n", flavor).as_bytes())?;
+    }
+
+    file.write_all("  </ItemGroup>\n".as_bytes())?;
+    file.write_all("</Project>\n".as_bytes())?;
 
     let end = std::time::Instant::now();
     println!("Elapsed Milliseconds: {}", (end - start).as_millis());
     println!("goodbye cruel world");
 
+    // Desired structure
+    // Headers
+    // A-Z
+    // PDBs
+    // foo.pdb
+    // cpp
+    // bar.pdb
+
     Ok(())
+}
+
+fn file_exists(path: &Path) -> bool {
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.is_file() {
+            return true;
+        } else if meta.is_symlink() {
+            // Follow symlink
+            if let Ok(real_path) = std::fs::read_link(&path) {
+                if let Ok(meta) = std::fs::metadata(&real_path) {
+                    if meta.is_file() {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+fn to_local_file(
+    file: PathBuf,
+    user_roots: &[PathBuf],
+    known_maps: Arc<DashMap<PathBuf, PathBuf>>,
+) -> Option<PathBuf> {
+    if file_exists(&file) {
+        return Some(file);
+    } else {
+        // See if a known map applies
+        for kvp in known_maps.iter() {
+            let src = kvp.key();
+            let dst = kvp.value();
+
+            if file.starts_with(src) {
+                let tail = file.strip_prefix(src).ok()?;
+                let maybe_filepath = dst.join(tail);
+                if file_exists(&maybe_filepath) {
+                    //println!("it helped!");
+                    return Some(maybe_filepath.to_owned());
+                }
+            }
+        }
+
+        // Couldn't find file. See if it exists relative to a root
+        let components: Vec<_> = file.components().collect();
+        let mut idx: i32 = components.len() as i32 - 1;
+        let mut relpath = PathBuf::new();
+        while idx >= 0 {
+            let comp: &Path = components[idx as usize].as_ref();
+            relpath = if relpath.as_os_str().is_empty() {
+                comp.to_path_buf()
+            } else {
+                comp.join(&relpath)
+            };
+
+            for user_root in user_roots {
+                let maybe_filepath = user_root.join(&relpath);
+                //println!("    {:?}", maybe_filepath);
+                if file_exists(&maybe_filepath) {
+                    // create a new known map
+                    let pdb_path: PathBuf = components.iter().take(idx as usize).collect();
+                    //println!("inserting {:?}, {:?}", pdb_path, user_root);
+                    known_maps.insert(pdb_path, user_root.to_owned());
+
+                    return Some(maybe_filepath);
+                }
+            }
+
+            idx -= 1;
+        }
+
+        None
+    }
 }
 
 fn find_all_pdbs(target: &Path) -> anyhow::Result<Vec<PathBuf>> {
@@ -272,8 +336,12 @@ fn get_source_files(pdb: &PathBuf) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 fn split_filepath(path: &Path) -> anyhow::Result<(PathBuf, PathBuf)> {
-    let filename = path.file_name().ok_or_else(|| anyhow!("Couldn't get filename from {:?}", path))?;
-    let dir = path.parent().ok_or_else(|| anyhow!("Couldn't get parent from {:?}", path))?;
+    let filename = path
+        .file_name()
+        .ok_or_else(|| anyhow!("Couldn't get filename from {:?}", path))?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| anyhow!("Couldn't get parent from {:?}", path))?;
 
     Ok((filename.into(), dir.into()))
 }
@@ -303,15 +371,16 @@ fn get_dependencies(filename: &Path, dir: &Path) -> anyhow::Result<Vec<PathBuf>>
             //let import_desc = windows::Win32::System::Diagnostics::Debug::GetPointer
             let virtual_address = optional_header.DataDirectory[1].VirtualAddress;
 
-            let mut import_desc =
-                get_ptr_from_virtual_address(virtual_address, file_header, mapped_address) as *const WinSys::IMAGE_IMPORT_DESCRIPTOR;
+            let mut import_desc = get_ptr_from_virtual_address(virtual_address, file_header, mapped_address)
+                as *const WinSys::IMAGE_IMPORT_DESCRIPTOR;
 
             loop {
                 if (*import_desc).TimeDateStamp == 0 && (*import_desc).Name == 0 {
                     break;
                 }
 
-                let name_ptr = get_ptr_from_virtual_address((*import_desc).Name, file_header, mapped_address) as *const i8;
+                let name_ptr =
+                    get_ptr_from_virtual_address((*import_desc).Name, file_header, mapped_address) as *const i8;
 
                 let name = std::ffi::CStr::from_ptr(name_ptr).to_str()?;
                 result.push(name.into());
@@ -338,7 +407,10 @@ unsafe fn get_ptr_from_virtual_address(
     mapped_address.offset(offset) as *const c_void
 }
 
-unsafe fn get_enclosing_section_header(addr: u32, image_header: *const WinDbg::IMAGE_NT_HEADERS64) -> *const WinDbg::IMAGE_SECTION_HEADER {
+unsafe fn get_enclosing_section_header(
+    addr: u32,
+    image_header: *const WinDbg::IMAGE_NT_HEADERS64,
+) -> *const WinDbg::IMAGE_SECTION_HEADER {
     // Not sure how do replicate this macro in rust
     // so offset is hardcoded
     //#define IMAGE_FIRST_SECTION( ntheader ) ((PIMAGE_SECTION_HEADER)        \
