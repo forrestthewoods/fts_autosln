@@ -28,13 +28,10 @@ fn main() -> anyhow::Result<()> {
     println!("Finding PDBs");
     let pdbs = find_all_pdbs(&PathBuf::from(test_target))?;
 
-    //let mut headers: HashSet<PathBuf> = Default::default();
-    //let mut source_files2: HashMap<PathBuf, HashSet<PathBuf>> = Default::default(); // pdb_name -> local filepaths
-    let known_maps: Arc<DashMap<PathBuf, PathBuf>> = Default::default();
-
-    // TODO: parallelize
+    // Map PDB paths to local files
     println!("Finding local files");
     let processed_paths: Arc<DashSet<String>> = Default::default();
+    let known_maps: Arc<DashMap<PathBuf, PathBuf>> = Default::default();
     let stuff : Vec<(PathBuf, HashSet<PathBuf>, HashSet<PathBuf>)> = pdbs
         .par_iter()
         .map(|pdb_path| {
@@ -212,14 +209,6 @@ fn main() -> anyhow::Result<()> {
     let end = std::time::Instant::now();
     println!("Elapsed Milliseconds: {}", (end - start).as_millis());
     println!("goodbye cruel world");
-
-    // Desired structure
-    // Headers
-    // A-Z
-    // PDBs
-    // foo.pdb
-    // cpp
-    // bar.pdb
 
     Ok(())
 }
