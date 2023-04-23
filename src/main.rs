@@ -203,7 +203,7 @@ fn sln_from_exe() -> anyhow::Result<()> {
 
     // Write vcxproj.filters
     println!("Writing vcxproj.filters");
-    let mut file = std::fs::File::create("c:/temp/foo/foo.vcxproj.filters")?;
+    let mut file = std::fs::File::create("c:/temp/foo/source_code.vcxproj.filters")?;
     file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
     file.write_all(
         "<Project ToolsVersion=\"4.0\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes(),
@@ -211,7 +211,7 @@ fn sln_from_exe() -> anyhow::Result<()> {
 
     // Unique identifiers
     file.write_all("  <ItemGroup>\n".as_bytes())?;
-    file.write_all("    <Filter Include=\"headers\">\n".as_bytes())?;
+    file.write_all("    <Filter Include=\"Headers\">\n".as_bytes())?;
     file.write_all(format!("      <UniqueIdentifier>{{{}}}</UniqueIdentifier>\n", Uuid::new_v4()).as_bytes())?;
     file.write_all("    </Filter>\n".as_bytes())?;
     for (pdb_name, _) in &source_files {
@@ -225,7 +225,7 @@ fn sln_from_exe() -> anyhow::Result<()> {
     file.write_all("  <ItemGroup>\n".as_bytes())?;
     for filepath in &headers {
         file.write_all(format!("    <ClInclude Include={:?}>\n", filepath).as_bytes())?;
-        file.write_all("      <Filter>headers</Filter>\n".as_bytes())?;
+        file.write_all("      <Filter>Headers</Filter>\n".as_bytes())?;
         file.write_all("    </ClInclude>\n".as_bytes())?;
     }
     for (pdb_name, filepaths) in &source_files {
