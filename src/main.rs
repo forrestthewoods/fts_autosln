@@ -28,14 +28,14 @@ fn sln_from_exe() -> anyhow::Result<()> {
     // Define target
     //let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
     //let test_target = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe";
-    let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
+    let test_target : PathBuf = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe".into();
 
     let user_roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1/".into()];
     let exclude_dirs: Vec<String> = ["Visual Studio".into(), "Windows Kits".into()].into_iter().collect();
 
     // Get PDBs for target
     println!("Finding PDBs");
-    let pdbs = find_all_pdbs(&PathBuf::from(test_target))?;
+    let pdbs = find_all_pdbs(&test_target)?;
 
     // Map PDB paths to local files
     println!("Finding local files");
@@ -109,23 +109,51 @@ fn sln_from_exe() -> anyhow::Result<()> {
     file.write_all("VisualStudioVersion = 17.5.33424.131\n".as_bytes())?;
     file.write_all("MinimumVisualStudioVersion = 10.0.40219.1\n".as_bytes())?;
 
+
+    // exe project
+    file.write_all(
+        format!(
+            "Project(\"{{{}}}\") = \"exe\", {:?}, \"{{{}}}\"\n",
+            Uuid::new_v4(),
+            test_target,
+            Uuid::new_v4()
+        )
+        .as_bytes(),
+    )?;
+    file.write_all("\tProjectSection(DebuggerProjectSystem) = preProject\n".as_bytes())?;
+    file.write_all("\t\tPortSupplier = 00000000-0000-0000-0000-000000000000\n".as_bytes())?;
+    file.write_all(format!("\t\tExecutable = {}\n", test_target.to_string_lossy()).as_bytes())?;
+    file.write_all("\t\tRemoteMachine = DESKTOP-1U7T4L2\n".as_bytes())?;
+    file.write_all(format!("\t\tStartingDirectory = {}\n", test_target.parent().unwrap().to_string_lossy()).as_bytes())?;
+    file.write_all("\t\tEnvironment = Default\n".as_bytes())?;
+    file.write_all("\t\tLaunchingEngine = 00000000-0000-0000-0000-000000000000\n".as_bytes())?;
+    file.write_all("\t\tUseLegacyDebugEngines = No\n".as_bytes())?;
+    file.write_all("\t\tLaunchSQLEngine = No\n".as_bytes())?;
+    file.write_all("\t\tAttachLaunchAction = No\n".as_bytes())?;
+    file.write_all("\t\tIORedirection = Auto\n".as_bytes())?;
+    file.write_all("\t\tEndProjectSection\n".as_bytes())?;
+    file.write_all("\tEndProjectSection\n".as_bytes())?;
+    file.write_all("EndProject\n".as_bytes())?;
+
+    // source_code project
     let vcxproj_id = Uuid::new_v4();
     file.write_all(
         format!(
-            "Project(\"{{{}}}\") = \"FOO\", \"FOO.vcxproj\", \"{{{}}}\"\n",
+            "Project(\"{{{}}}\") = \"source_code\", \"source_code.vcxproj\", \"{{{}}}\"\n",
             Uuid::new_v4(),
             vcxproj_id
         )
         .as_bytes(),
     )?;
     file.write_all("EndProject\n".as_bytes())?;
+
     file.write_all("Global\n".as_bytes())?;
     file.write_all("    GlobalSection(SolutionConfigurationPlatforms) = preSolution\n".as_bytes())?;
-    file.write_all("    	Unknown|x64 = Unknown|x64\n".as_bytes())?;
+    file.write_all("    	Release|x64 = Release|x64\n".as_bytes())?;
     file.write_all("    EndGlobalSection\n".as_bytes())?;
     file.write_all("GlobalSection(ProjectConfigurationPlatforms) = postSolution\n".as_bytes())?;
-    file.write_all(format!("	    {{{}}}.Unknown|x64.ActiveCfg = Unknown|x64\n", vcxproj_id).as_bytes())?;
-    file.write_all(format!("	    {{{}}}.Unknown|x64.Build.0 = Unknown|x64\n", vcxproj_id).as_bytes())?;
+    file.write_all(format!("	    {{{}}}.Release|x64.ActiveCfg = Release|x64\n", vcxproj_id).as_bytes())?;
+    file.write_all(format!("	    {{{}}}.Release|x64.Build.0 = Release|x64\n", vcxproj_id).as_bytes())?;
     file.write_all("EndGlobalSection\n".as_bytes())?;
     file.write_all("GlobalSection(ExtensibilityGlobals) = postSolution\n".as_bytes())?;
     file.write_all(format!("    SolutionGuid = {{{}}}\n", Uuid::new_v4()).as_bytes())?;
@@ -134,15 +162,15 @@ fn sln_from_exe() -> anyhow::Result<()> {
 
     // Write vcxproj
     println!("Writing vcxproj");
-    let mut file = std::fs::File::create("c:/temp/foo/foo.vcxproj")?;
+    let mut file = std::fs::File::create("c:/temp/foo/source_code.vcxproj")?;
     file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
     file.write_all(
         "<Project DefaultTargets=\"Build\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes(),
     )?;
 
     file.write_all("<ItemGroup Label=\"ProjectConfigurations\">\n".as_bytes())?;
-    file.write_all("    <ProjectConfiguration Include=\"Unknown|x64\">\n".as_bytes())?;
-    file.write_all("      <Configuration>Unknown</Configuration>\n".as_bytes())?;
+    file.write_all("    <ProjectConfiguration Include=\"Release|x64\">\n".as_bytes())?;
+    file.write_all("      <Configuration>Release</Configuration>\n".as_bytes())?;
     file.write_all("      <Platform>x64</Platform>\n".as_bytes())?;
     file.write_all("    </ProjectConfiguration>\n".as_bytes())?;
     file.write_all("</ItemGroup>\n".as_bytes())?;
@@ -209,18 +237,18 @@ fn sln_from_exe() -> anyhow::Result<()> {
     file.write_all("</Project>\n".as_bytes())?;
 
     // Write vcxproj.user
-    println!("Writing vcxproj.user");
-    let mut file = std::fs::File::create("c:/temp/foo/foo.vcxproj.user")?;
-    file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
-    file.write_all(
-        "<Project ToolsVersion=\"Current\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes(),
-    )?;
-    file.write_all("  <PropertyGroup Condition=\"'$(Configuration)|$(Platform)'=='Unknown|x64'\">\n".as_bytes())?;
-    file.write_all(format!("    <LocalDebuggerCommand>{test_target}</LocalDebuggerCommand>\n").as_bytes())?;
-    file.write_all("    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>\n".as_bytes())?;
-    file.write_all("  </PropertyGroup>\n".as_bytes())?;
+    // println!("Writing vcxproj.user");
+    // let mut file = std::fs::File::create("c:/temp/foo/foo.vcxproj.user")?;
+    // file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
+    // file.write_all(
+    //     "<Project ToolsVersion=\"Current\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes(),
+    // )?;
+    // file.write_all("  <PropertyGroup Condition=\"'$(Configuration)|$(Platform)'=='Release|x64'\">\n".as_bytes())?;
+    // file.write_all(format!("    <LocalDebuggerCommand>{test_target}</LocalDebuggerCommand>\n").as_bytes())?;
+    // file.write_all("    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>\n".as_bytes())?;
+    // file.write_all("  </PropertyGroup>\n".as_bytes())?;
 
-    file.write_all("</Project>\n".as_bytes())?;
+    // file.write_all("</Project>\n".as_bytes())?;
 
     // Success!
     Ok(())
