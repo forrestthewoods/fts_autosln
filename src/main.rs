@@ -22,25 +22,32 @@ fn main() -> anyhow::Result<()> {
     let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
 
     let user_roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1/".into()];
+    let exclude_dirs: Vec<String> = ["Visual Studio".into(), "Windows Kits".into()].into_iter().collect();
     
     // Get PDBs for target
     let pdbs = find_all_pdbs(&PathBuf::from(test_target))?;
 
     // Get filepaths from PDBs
-    let source_files: HashSet<PathBuf> = pdbs
-        .par_iter()
-        .flat_map(|pdb| get_source_files(&pdb).unwrap_or_default())
-        .collect();
+    // let source_files: HashSet<PathBuf> = pdbs
+    //     .par_iter()
+    //     .flat_map(|pdb| get_source_files(&pdb).unwrap_or_default())
+    //     .collect();
 
     let mut headers: HashSet<PathBuf> = Default::default();
     let mut source_files2: HashMap<PathBuf, HashSet<PathBuf>> = Default::default();
     let known_maps: Arc<DashMap<PathBuf, PathBuf>> = Default::default();
 
+    // TODO: parallelize
     for pdb in &pdbs {
         let files = get_source_files(pdb).unwrap_or_default();
         let files_entry = &mut source_files2.entry(pdb.clone()).or_default();
         for file in files {
             if let Some(local_file) = to_local_file(file, &user_roots, known_maps.clone()) {
+                let lossy_file = local_file.to_string_lossy();
+                if exclude_dirs.iter().any(|exclude| lossy_file.contains(exclude)) {
+                    continue;
+                }
+
                 let ext = local_file.extension().unwrap_or_default();
                 if ext == "h" || ext == "hpp" {
                     headers.insert(local_file);
@@ -51,12 +58,11 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-
     // Find local files
-    let local_files: Vec<PathBuf> = source_files
-        .into_par_iter()
-        .filter_map(|file| to_local_file(file, &user_roots, known_maps.clone()))
-        .collect();
+    // let local_files: Vec<PathBuf> = source_files
+    //     .into_par_iter()
+    //     .filter_map(|file| to_local_file(file, &user_roots, known_maps.clone()))
+    //     .collect();
 
     // Write solution
     let mut file = std::fs::File::create("c:/temp/foo.sln")?;
@@ -124,20 +130,10 @@ fn main() -> anyhow::Result<()> {
 
     file.write_all("  <ItemGroup>\n".as_bytes())?;
 
-    let excludes: Vec<String> = ["Visual Studio".into(), "Windows Kits".into()].into_iter().collect();
-    for local_file in local_files.iter().sorted() {
-        let lossy_file = local_file.to_string_lossy();
-        if excludes.iter().any(|exclude| lossy_file.contains(exclude)) {
-            continue;
-        }
-        let lossy_file = local_file.to_string_lossy();
-        let flavor = if lossy_file.ends_with(".cpp") {
-            "ClCompile"
-        } else {
-            "ClInclude"
-        };
-        file.write_all(format!("    <{} Include={:?} />\n", flavor, lossy_file).as_bytes())?;
+    for source_file in headers.iter().chain(source_files2.iter().flat_map(|(_, files)| files.iter())) {
+        file.write_all(format!("    <ClInclude Include={:?} />\n", source_file).as_bytes())?;
     }
+
     file.write_all("  </ItemGroup>\n".as_bytes())?;
     file.write_all("</Project>\n".as_bytes())?;
 
@@ -147,23 +143,29 @@ fn main() -> anyhow::Result<()> {
     file.write_all(
         "<Project ToolsVersion=\"4.0\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes(),
     )?;
+
+    file.write_all("  <ItemGroup>\n".as_bytes())?;
+    file.write_all("    <Filter Include=\"headers\">\n".as_bytes())?;
+    file.write_all(format!("      <UniqueIdentifier>{{{}}}</UniqueIdentifier>\n", Uuid::new_v4()).as_bytes())?;
+    file.write_all("    </Filter>\n".as_bytes())?;
+    for (pdb_path,_) in &source_files2 {
+        let pdb_name = pdb_path.file_stem().unwrap();
+        file.write_all(format!("    <Filter Include={:?}>\n", pdb_name).as_bytes())?;
+        file.write_all(format!("      <UniqueIdentifier>{{{}}}</UniqueIdentifier>\n", Uuid::new_v4()).as_bytes())?;
+        file.write_all("    </Filter>\n".as_bytes())?;
+    }
+    file.write_all("  </ItemGroup>\n".as_bytes())?;
+
     file.write_all("  <ItemGroup>\n".as_bytes())?;
 
-    for local_file in local_files.iter().sorted() {
-        if local_file.to_string_lossy().contains("Program Files") {
-            continue;
+    for (pdb_path, filepaths) in &source_files2 {
+        let pdb_name = pdb_path.file_stem().unwrap().to_string_lossy();
+        for filepath in filepaths {
+            file.write_all(format!("    <ClInclude Include={:?}>\n", filepath).as_bytes())?;
+            file.write_all(format!("      <Filter>{}</Filter>\n", pdb_name).as_bytes())?;
+            file.write_all("    </ClInclude>\n".as_bytes())?;
         }
-        let lossy_file = local_file.to_string_lossy();
-        let flavor = if lossy_file.ends_with(".cpp") {
-            "ClCompile"
-        } else {
-            "ClInclude"
-        };
-        file.write_all(format!("    <{} Include={:?}>\n", flavor, lossy_file).as_bytes())?;
-        file.write_all(format!("      <Filter>Ham/Eggs</Filter>\n").as_bytes())?;
-        file.write_all(format!("    </{}>\n", flavor).as_bytes())?;
     }
-
     file.write_all("  </ItemGroup>\n".as_bytes())?;
     file.write_all("</Project>\n".as_bytes())?;
 
