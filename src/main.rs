@@ -23,7 +23,7 @@ fn main() -> anyhow::Result<()> {
 
     let user_roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1/".into()];
     let exclude_dirs: Vec<String> = ["Visual Studio".into(), "Windows Kits".into()].into_iter().collect();
-    
+
     // Get PDBs for target
     let pdbs = find_all_pdbs(&PathBuf::from(test_target))?;
 
@@ -34,30 +34,69 @@ fn main() -> anyhow::Result<()> {
     //     .collect();
 
     let mut headers: HashSet<PathBuf> = Default::default();
-    let mut source_files2: HashMap<PathBuf, HashSet<PathBuf>> = Default::default();
+    let mut source_files2: HashMap<PathBuf, HashSet<PathBuf>> = Default::default(); // pdb_name -> local filepaths
     let known_maps: Arc<DashMap<PathBuf, PathBuf>> = Default::default();
 
     // TODO: parallelize
     println!("Finding local files");
-    for pdb in &pdbs {
-        let files = get_source_files(pdb).unwrap_or_default();
-        let files_entry = &mut source_files2.entry(pdb.clone()).or_default();
-        for file in files {
-            if let Some(local_file) = to_local_file(&file, &user_roots, &known_maps) {
-                let lossy_file = local_file.to_string_lossy();
-                if exclude_dirs.iter().any(|exclude| lossy_file.contains(exclude)) {
+    let mut processed_paths: HashSet<String> = Default::default();
+    for pdb_path in &pdbs {
+        let pdb_name: PathBuf = pdb_path
+            .file_stem()
+            .ok_or_else(|| anyhow!("failed to get pdb filename from [{:?}]", pdb_path))?
+            .into();
+        let pdb_files = get_source_files(pdb_path).unwrap_or_default();
+
+        for filepath in pdb_files {
+            // Don't process the same paths over and over
+            let inserted = processed_paths.insert(filepath.to_string_lossy().to_string());
+            if !inserted {
+                continue;
+            }
+
+            if let Some(local_file) = to_local_file(filepath, &user_roots, &known_maps) {
+                if exclude_dirs
+                    .iter()
+                    .any(|exclude| local_file.to_string_lossy().contains(exclude))
+                {
                     continue;
                 }
 
                 let ext = local_file.extension().unwrap_or_default();
-                if ext == "h" || ext == "hpp" {
+                if ext == "h" || ext == "hpp" || ext == "inl" {
                     headers.insert(local_file);
                 } else {
-                    files_entry.insert(local_file);
+                    if let Some(value) = source_files2.get_mut(&pdb_name) {
+                        value.insert(local_file);
+                    } else {
+                        let value: HashSet<PathBuf> = [local_file].into();
+                        source_files2.insert(pdb_name.clone(), value);
+                    }
                 }
             }
         }
     }
+
+    // TODO: parallelize
+    println!("Finding local files");
+    // for pdb in &pdbs {
+    //     let files = get_source_files(pdb).unwrap_or_default();
+    //     let files_entry = &mut source_files2.entry(pdb.clone()).or_default();
+    //     for file in files {
+    //         if let Some(local_file) = to_local_file(file, &user_roots, &known_maps) {
+    //             if exclude_dirs.iter().any(|exclude| local_file.to_string_lossy().contains(exclude)) {
+    //                 continue;
+    //             }
+
+    //             let ext = local_file.extension().unwrap_or_default();
+    //             if ext == "h" || ext == "hpp" || ext == "inl" {
+    //                 headers.insert(local_file);
+    //             } else {
+    //                 files_entry.insert(local_file);
+    //             }
+    //         }
+    //     }
+    // }
 
     // Find local files
     // let local_files: Vec<PathBuf> = source_files
@@ -133,7 +172,11 @@ fn main() -> anyhow::Result<()> {
 
     file.write_all("  <ItemGroup>\n".as_bytes())?;
 
-    for source_file in headers.iter().chain(source_files2.iter().flat_map(|(_, files)| files.iter())).unique() {
+    for source_file in headers
+        .iter()
+        .chain(source_files2.iter().flat_map(|(_, files)| files.iter()))
+        .unique()
+    {
         file.write_all(format!("    <ClInclude Include={:?} />\n", source_file).as_bytes())?;
     }
 
@@ -148,36 +191,34 @@ fn main() -> anyhow::Result<()> {
         "<Project ToolsVersion=\"4.0\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes(),
     )?;
 
+    // Unique identifiers
     file.write_all("  <ItemGroup>\n".as_bytes())?;
     file.write_all("    <Filter Include=\"headers\">\n".as_bytes())?;
     file.write_all(format!("      <UniqueIdentifier>{{{}}}</UniqueIdentifier>\n", Uuid::new_v4()).as_bytes())?;
     file.write_all("    </Filter>\n".as_bytes())?;
-    for (pdb_path,_) in &source_files2 {
-        let pdb_name = pdb_path.file_stem().unwrap();
+    for (pdb_name, _) in &source_files2 {
         file.write_all(format!("    <Filter Include={:?}>\n", pdb_name).as_bytes())?;
         file.write_all(format!("      <UniqueIdentifier>{{{}}}</UniqueIdentifier>\n", Uuid::new_v4()).as_bytes())?;
         file.write_all("    </Filter>\n".as_bytes())?;
     }
     file.write_all("  </ItemGroup>\n".as_bytes())?;
 
+    // File paths with filter
     file.write_all("  <ItemGroup>\n".as_bytes())?;
-
-    for (pdb_path, filepaths) in &source_files2 {
-        let pdb_name = pdb_path.file_stem().unwrap().to_string_lossy();
-        for filepath in filepaths {
-            file.write_all(format!("    <ClInclude Include={:?}>\n", filepath).as_bytes())?;
-            file.write_all(format!("      <Filter>{}</Filter>\n", pdb_name).as_bytes())?;
-            file.write_all("    </ClInclude>\n".as_bytes())?;
-        }
-    }
-
     for filepath in headers.iter().sorted_by_key(|filepath| filepath.file_stem().unwrap()) {
         file.write_all(format!("    <ClInclude Include={:?}>\n", filepath).as_bytes())?;
         file.write_all("      <Filter>headers</Filter>\n".as_bytes())?;
         file.write_all("    </ClInclude>\n".as_bytes())?;
     }
-
+    for (pdb_name, filepaths) in source_files2 {
+        for filepath in filepaths.iter().sorted_by_key(|filepath| filepath.file_stem().unwrap()) {
+            file.write_all(format!("    <ClInclude Include={:?}>\n", filepath).as_bytes())?;
+            file.write_all(format!("      <Filter>{}</Filter>\n", pdb_name.to_string_lossy()).as_bytes())?;
+            file.write_all("    </ClInclude>\n".as_bytes())?;
+        }
+    }
     file.write_all("  </ItemGroup>\n".as_bytes())?;
+
     file.write_all("</Project>\n".as_bytes())?;
 
     let end = std::time::Instant::now();
@@ -215,11 +256,10 @@ fn file_exists(path: &Path) -> bool {
 }
 
 fn to_local_file(
-    file: &Path,
+    file: PathBuf,
     user_roots: &[PathBuf],
     known_maps: &Arc<DashMap<PathBuf, PathBuf>>,
 ) -> Option<PathBuf> {
-    let file : PathBuf = file.as_os_str().to_ascii_lowercase().into();
     if file_exists(&file) {
         return Some(file);
     } else {
