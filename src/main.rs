@@ -14,12 +14,21 @@ use windows_sys::Win32::System::SystemServices as WinSys;
 
 fn main() -> anyhow::Result<()> {
     println!("hello world");
-    let start = std::time::Instant::now();
 
+    let start = std::time::Instant::now();
+    sln_from_exe()?;
+    let end = std::time::Instant::now();
+    println!("Elapsed Milliseconds: {}", (end - start).as_millis());
+
+    println!("goodbye cruel world");
+    Ok(())
+}
+
+fn sln_from_exe() -> anyhow::Result<()> {
     // Define target
-    let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
+    //let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
     //let test_target = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe";
-    //let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
+    let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
 
     let user_roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1/".into()];
     let exclude_dirs: Vec<String> = ["Visual Studio".into(), "Windows Kits".into()].into_iter().collect();
@@ -32,7 +41,7 @@ fn main() -> anyhow::Result<()> {
     println!("Finding local files");
     let processed_paths: Arc<DashSet<String>> = Default::default();
     let known_maps: Arc<DashMap<PathBuf, PathBuf>> = Default::default();
-    let stuff : Vec<(PathBuf, HashSet<PathBuf>, HashSet<PathBuf>)> = pdbs
+    let stuff: Vec<(PathBuf, HashSet<PathBuf>, HashSet<PathBuf>)> = pdbs
         .par_iter()
         .map(|pdb_path| {
             let pdb_name: PathBuf = pdb_path.file_stem().unwrap().into();
@@ -92,7 +101,8 @@ fn main() -> anyhow::Result<()> {
 
     // Write solution
     println!("Writing sln");
-    let mut file = std::fs::File::create("c:/temp/foo.sln")?;
+    std::fs::create_dir_all("c:/temp/foo/")?;
+    let mut file = std::fs::File::create("c:/temp/foo/foo.sln")?;
     file.write_all("\n".as_bytes())?; // empty newline
     file.write_all("Microsoft Visual Studio Solution File, Format Version 12.00\n".as_bytes())?;
     file.write_all("# Visual Studio Version 17\n".as_bytes())?;
@@ -111,14 +121,11 @@ fn main() -> anyhow::Result<()> {
     file.write_all("EndProject\n".as_bytes())?;
     file.write_all("Global\n".as_bytes())?;
     file.write_all("    GlobalSection(SolutionConfigurationPlatforms) = preSolution\n".as_bytes())?;
-    file.write_all("    	Debug|x64 = Debug|x64\n".as_bytes())?;
-    file.write_all("    	Release|x64 = Release|x64\n".as_bytes())?;
+    file.write_all("    	Unknown|x64 = Unknown|x64\n".as_bytes())?;
     file.write_all("    EndGlobalSection\n".as_bytes())?;
     file.write_all("GlobalSection(ProjectConfigurationPlatforms) = postSolution\n".as_bytes())?;
-    file.write_all(format!("	    {{{}}}.Debug|x64.ActiveCfg = Debug|x64\n", vcxproj_id).as_bytes())?;
-    file.write_all(format!("	    {{{}}}.Debug|x64.Build.0 = Debug|x64\n", vcxproj_id).as_bytes())?;
-    file.write_all(format!("	    {{{}}}.Release|x64.ActiveCfg = Release|x64\n", vcxproj_id).as_bytes())?;
-    file.write_all(format!("	    {{{}}}.Release|x64.Build.0 = Release|x64\n", vcxproj_id).as_bytes())?;
+    file.write_all(format!("	    {{{}}}.Unknown|x64.ActiveCfg = Unknown|x64\n", vcxproj_id).as_bytes())?;
+    file.write_all(format!("	    {{{}}}.Unknown|x64.Build.0 = Unknown|x64\n", vcxproj_id).as_bytes())?;
     file.write_all("EndGlobalSection\n".as_bytes())?;
     file.write_all("GlobalSection(ExtensibilityGlobals) = postSolution\n".as_bytes())?;
     file.write_all(format!("    SolutionGuid = {{{}}}\n", Uuid::new_v4()).as_bytes())?;
@@ -127,19 +134,15 @@ fn main() -> anyhow::Result<()> {
 
     // Write vcxproj
     println!("Writing vcxproj");
-    let mut file = std::fs::File::create("c:/temp/foo.vcxproj")?;
+    let mut file = std::fs::File::create("c:/temp/foo/foo.vcxproj")?;
     file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
     file.write_all(
         "<Project DefaultTargets=\"Build\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes(),
     )?;
 
     file.write_all("<ItemGroup Label=\"ProjectConfigurations\">\n".as_bytes())?;
-    file.write_all("    <ProjectConfiguration Include=\"Debug|x64\">\n".as_bytes())?;
-    file.write_all("      <Configuration>Debug</Configuration>\n".as_bytes())?;
-    file.write_all("      <Platform>x64</Platform>\n".as_bytes())?;
-    file.write_all("    </ProjectConfiguration>\n".as_bytes())?;
-    file.write_all("    <ProjectConfiguration Include=\"Release|x64\">\n".as_bytes())?;
-    file.write_all("      <Configuration>Release</Configuration>\n".as_bytes())?;
+    file.write_all("    <ProjectConfiguration Include=\"Unknown|x64\">\n".as_bytes())?;
+    file.write_all("      <Configuration>Unknown</Configuration>\n".as_bytes())?;
     file.write_all("      <Platform>x64</Platform>\n".as_bytes())?;
     file.write_all("    </ProjectConfiguration>\n".as_bytes())?;
     file.write_all("</ItemGroup>\n".as_bytes())?;
@@ -170,7 +173,7 @@ fn main() -> anyhow::Result<()> {
 
     // Write vcxproj.filters
     println!("Writing vcxproj.filters");
-    let mut file = std::fs::File::create("c:/temp/foo.vcxproj.filters")?;
+    let mut file = std::fs::File::create("c:/temp/foo/foo.vcxproj.filters")?;
     file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
     file.write_all(
         "<Project ToolsVersion=\"4.0\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes(),
@@ -203,13 +206,23 @@ fn main() -> anyhow::Result<()> {
         }
     }
     file.write_all("  </ItemGroup>\n".as_bytes())?;
+    file.write_all("</Project>\n".as_bytes())?;
+
+    // Write vcxproj.user
+    println!("Writing vcxproj.user");
+    let mut file = std::fs::File::create("c:/temp/foo/foo.vcxproj.user")?;
+    file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
+    file.write_all(
+        "<Project ToolsVersion=\"Current\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes(),
+    )?;
+    file.write_all("  <PropertyGroup Condition=\"'$(Configuration)|$(Platform)'=='Unknown|x64'\">\n".as_bytes())?;
+    file.write_all(format!("    <LocalDebuggerCommand>{test_target}</LocalDebuggerCommand>\n").as_bytes())?;
+    file.write_all("    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>\n".as_bytes())?;
+    file.write_all("  </PropertyGroup>\n".as_bytes())?;
 
     file.write_all("</Project>\n".as_bytes())?;
 
-    let end = std::time::Instant::now();
-    println!("Elapsed Milliseconds: {}", (end - start).as_millis());
-    println!("goodbye cruel world");
-
+    // Success!
     Ok(())
 }
 
@@ -398,9 +411,7 @@ fn get_dependencies(filename: &Path, dir: &Path) -> anyhow::Result<Vec<PathBuf>>
         let optional_header = &(*file_header).OptionalHeader;
         let mapped_address = (*image).MappedAddress;
         if optional_header.NumberOfRvaAndSizes >= 2 {
-            //let import_desc = windows::Win32::System::Diagnostics::Debug::GetPointer
             let virtual_address = optional_header.DataDirectory[1].VirtualAddress;
-
             let mut import_desc = get_ptr_from_virtual_address(virtual_address, file_header, mapped_address)
                 as *const WinSys::IMAGE_IMPORT_DESCRIPTOR;
 
