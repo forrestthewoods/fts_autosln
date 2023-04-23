@@ -17,9 +17,9 @@ fn main() -> anyhow::Result<()> {
     let start = std::time::Instant::now();
 
     // Define target
-    //let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
+    let test_target = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe";
     //let test_target = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe";
-    let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
+    //let test_target = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe";
 
     let user_roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1/".into()];
     let exclude_dirs: Vec<String> = ["Visual Studio".into(), "Windows Kits".into()].into_iter().collect();
@@ -38,11 +38,12 @@ fn main() -> anyhow::Result<()> {
     let known_maps: Arc<DashMap<PathBuf, PathBuf>> = Default::default();
 
     // TODO: parallelize
+    println!("Finding local files");
     for pdb in &pdbs {
         let files = get_source_files(pdb).unwrap_or_default();
         let files_entry = &mut source_files2.entry(pdb.clone()).or_default();
         for file in files {
-            if let Some(local_file) = to_local_file(file, &user_roots, known_maps.clone()) {
+            if let Some(local_file) = to_local_file(&file, &user_roots, &known_maps) {
                 let lossy_file = local_file.to_string_lossy();
                 if exclude_dirs.iter().any(|exclude| lossy_file.contains(exclude)) {
                     continue;
@@ -65,6 +66,7 @@ fn main() -> anyhow::Result<()> {
     //     .collect();
 
     // Write solution
+    println!("Writing sln");
     let mut file = std::fs::File::create("c:/temp/foo.sln")?;
     file.write_all("\n".as_bytes())?; // empty newline
     file.write_all("Microsoft Visual Studio Solution File, Format Version 12.00\n".as_bytes())?;
@@ -99,6 +101,7 @@ fn main() -> anyhow::Result<()> {
     file.write_all("EndGlobal\n".as_bytes())?;
 
     // Write vcxproj
+    println!("Writing vcxproj");
     let mut file = std::fs::File::create("c:/temp/foo.vcxproj")?;
     file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
     file.write_all(
@@ -130,7 +133,7 @@ fn main() -> anyhow::Result<()> {
 
     file.write_all("  <ItemGroup>\n".as_bytes())?;
 
-    for source_file in headers.iter().chain(source_files2.iter().flat_map(|(_, files)| files.iter())) {
+    for source_file in headers.iter().chain(source_files2.iter().flat_map(|(_, files)| files.iter())).unique() {
         file.write_all(format!("    <ClInclude Include={:?} />\n", source_file).as_bytes())?;
     }
 
@@ -138,6 +141,7 @@ fn main() -> anyhow::Result<()> {
     file.write_all("</Project>\n".as_bytes())?;
 
     // Write vcxproj.filters
+    println!("Writing vcxproj.filters");
     let mut file = std::fs::File::create("c:/temp/foo.vcxproj.filters")?;
     file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
     file.write_all(
@@ -166,6 +170,13 @@ fn main() -> anyhow::Result<()> {
             file.write_all("    </ClInclude>\n".as_bytes())?;
         }
     }
+
+    for filepath in headers.iter().sorted_by_key(|filepath| filepath.file_stem().unwrap()) {
+        file.write_all(format!("    <ClInclude Include={:?}>\n", filepath).as_bytes())?;
+        file.write_all("      <Filter>headers</Filter>\n".as_bytes())?;
+        file.write_all("    </ClInclude>\n".as_bytes())?;
+    }
+
     file.write_all("  </ItemGroup>\n".as_bytes())?;
     file.write_all("</Project>\n".as_bytes())?;
 
@@ -204,10 +215,11 @@ fn file_exists(path: &Path) -> bool {
 }
 
 fn to_local_file(
-    file: PathBuf,
+    file: &Path,
     user_roots: &[PathBuf],
-    known_maps: Arc<DashMap<PathBuf, PathBuf>>,
+    known_maps: &Arc<DashMap<PathBuf, PathBuf>>,
 ) -> Option<PathBuf> {
+    let file : PathBuf = file.as_os_str().to_ascii_lowercase().into();
     if file_exists(&file) {
         return Some(file);
     } else {
