@@ -26,9 +26,9 @@ fn main() -> anyhow::Result<()> {
 
 fn sln_from_exe() -> anyhow::Result<()> {
     // Define target
-    let test_target : PathBuf = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe".into();
+    //let test_target : PathBuf = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe".into();
     //let test_target : PathBuf = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe".into();
-    //let test_target : PathBuf = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe".into();
+    let test_target : PathBuf = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe".into();
 
     let user_roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1/".into()];
     let exclude_dirs: Vec<String> = ["Visual Studio".into(), "Windows Kits".into()].into_iter().collect();
@@ -113,12 +113,13 @@ fn sln_from_exe() -> anyhow::Result<()> {
 
 
     // exe project
+    let sln_id = Uuid::new_v4();
     file.write_all(
         format!(
             "Project(\"{{{}}}\") = \"exe\", {:?}, \"{{{}}}\"\n",
             Uuid::new_v4(),
             test_target,
-            Uuid::new_v4()
+            sln_id
         )
         .as_bytes(),
     )?;
@@ -150,16 +151,16 @@ fn sln_from_exe() -> anyhow::Result<()> {
     file.write_all("EndProject\n".as_bytes())?;
 
     file.write_all("Global\n".as_bytes())?;
-    file.write_all("    GlobalSection(SolutionConfigurationPlatforms) = preSolution\n".as_bytes())?;
-    file.write_all("    	Release|x64 = Release|x64\n".as_bytes())?;
-    file.write_all("    EndGlobalSection\n".as_bytes())?;
-    file.write_all("GlobalSection(ProjectConfigurationPlatforms) = postSolution\n".as_bytes())?;
-    file.write_all(format!("	    {{{}}}.Release|x64.ActiveCfg = Release|x64\n", vcxproj_id).as_bytes())?;
-    file.write_all(format!("	    {{{}}}.Release|x64.Build.0 = Release|x64\n", vcxproj_id).as_bytes())?;
-    file.write_all("EndGlobalSection\n".as_bytes())?;
-    file.write_all("GlobalSection(ExtensibilityGlobals) = postSolution\n".as_bytes())?;
-    file.write_all(format!("    SolutionGuid = {{{}}}\n", Uuid::new_v4()).as_bytes())?;
-    file.write_all("EndGlobalSection\n".as_bytes())?;
+    file.write_all("\tGlobalSection(SolutionConfigurationPlatforms) = preSolution\n".as_bytes())?;
+    file.write_all("\t\tRelease|x64 = Release|x64\n".as_bytes())?;
+    file.write_all("\tEndGlobalSection\n".as_bytes())?;
+    file.write_all("\tGlobalSection(ProjectConfigurationPlatforms) = postSolution\n".as_bytes())?;
+    file.write_all(format!("\t\t{{{}}}.Release|x64.ActiveCfg = Release|x64\n", sln_id).as_bytes())?;
+    file.write_all(format!("\t\t{{{}}}.Release|x64.ActiveCfg = Release|x64\n", vcxproj_id).as_bytes())?;
+    file.write_all("\tEndGlobalSection\n".as_bytes())?;
+    file.write_all("\tGlobalSection(ExtensibilityGlobals) = postSolution\n".as_bytes())?;
+    file.write_all(format!("\t\tSolutionGuid = {{{}}}\n", Uuid::new_v4()).as_bytes())?;
+    file.write_all("\tEndGlobalSection\n".as_bytes())?;
     file.write_all("EndGlobal\n".as_bytes())?;
 
     // Write vcxproj
