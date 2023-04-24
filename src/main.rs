@@ -13,6 +13,7 @@ use sysinfo::{PidExt, ProcessExt, System, SystemExt};
 use uuid::Uuid;
 
 use windows::Win32::System::Diagnostics::Debug as WinDbg;
+use windows_sys::Win32::System::ProcessStatus::MODULEINFO as ModuleInfo;
 use windows_sys::Win32::System::SystemServices as WinSys;
 use windows_sys::Win32::System::Threading as WinThread;
 
@@ -21,7 +22,7 @@ fn main() -> anyhow::Result<()> {
 
     let start = std::time::Instant::now();
     //sln_from_exe()?;
-    sln_from_pid("firefox.exe")?;
+    sln_from_pid("UnrealEditor.exe")?;
     let end = std::time::Instant::now();
     println!("Elapsed Milliseconds: {}", (end - start).as_millis());
 
@@ -41,18 +42,19 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
     println!("{pid} {}", proc.name());
 
     // Get handle to process
-    let handle = unsafe {
+    let process_handle = unsafe {
         WinThread::OpenProcess(
             WinThread::PROCESS_QUERY_INFORMATION | WinThread::PROCESS_VM_READ,
             0,
             pid.as_u32(),
         )
     };
+    let process_handle2 = windows::Win32::Foundation::HANDLE(process_handle);
 
-    if handle == 0 {
+    if process_handle == 0 {
         anyhow::bail!("Failed to open pid/process [{}]/[{}]", pid, proc.name());
     }
-    println!("handle: {:?}", handle);
+    println!("handle: {:?}", process_handle);
 
     // Find modules
     const MAX_MODULE_HANDES: usize = 4096;
@@ -60,7 +62,7 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
     unsafe {
         let mut bytes_needed: u32 = 0;
         let result = windows_sys::Win32::System::ProcessStatus::EnumProcessModules(
-            handle,
+            process_handle,
             module_handles.as_mut_ptr(),
             (std::mem::size_of::<isize>() * MAX_MODULE_HANDES) as u32,
             &mut bytes_needed,
@@ -77,7 +79,7 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
             const MAX_PATH: usize = windows_sys::Win32::Foundation::MAX_PATH as usize;
             let mut sz_mod_name: [u16; MAX_PATH] = [0; MAX_PATH];
             if windows_sys::Win32::System::ProcessStatus::GetModuleFileNameExW(
-                handle,
+                process_handle,
                 module_handles[i as usize],
                 sz_mod_name.as_mut_ptr(),
                 MAX_PATH as u32,
@@ -86,6 +88,40 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
                 let module_name = std::ffi::OsString::from_wide(&sz_mod_name);
                 println!("module: {}", module_name.to_string_lossy());
             }
+        }
+
+        // Set options before initialize
+        WinDbg::SymSetOptions(WinDbg::SYMOPT_UNDNAME | WinDbg::SYMOPT_DEFERRED_LOADS);
+
+        // Initialize symbols, including loaded modules
+        let success = WinDbg::SymInitialize(process_handle2, windows::core::PCSTR::null(), true);
+        println!("SymInitialize result: [{success:?}]");
+
+        let module_handle = module_handles[0];
+        
+        let mut module_info = ModuleInfo {
+            lpBaseOfDll: std::ptr::null_mut(),
+            SizeOfImage: 0,
+            EntryPoint: std::ptr::null_mut()};
+
+        let result = 
+            windows_sys::Win32::System::ProcessStatus::GetModuleInformation(
+                process_handle,
+                module_handle,
+                &mut module_info,
+                std::mem::size_of::<ModuleInfo>() as u32,
+            );
+
+        println!("GetModuleInformation result: [{result:?}] Base: [{:?}]", module_info.lpBaseOfDll);
+
+        // Get Symbols
+        let mut pdb_image : WinDbg::IMAGEHLP_MODULE64 = Default::default();
+        let result = WinDbg::SymGetModuleInfo64(process_handle2, module_info.lpBaseOfDll as u64, &mut pdb_image);
+        println!("SymGetModuleInfo64 result: [{result:?}]");
+
+        if result.0 == 1 {
+            let pdb_path = String::from_utf8(pdb_image.LoadedImageName.to_vec());
+            println!("pdb path: [{pdb_path:?}]");
         }
 
         // {
@@ -107,7 +143,8 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
 
     // Cleanup
     unsafe {
-        windows_sys::Win32::Foundation::CloseHandle(handle);
+        WinDbg::SymCleanup(process_handle2);
+        windows_sys::Win32::Foundation::CloseHandle(process_handle);
     }
 
     Ok(())
