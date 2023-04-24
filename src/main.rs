@@ -6,17 +6,22 @@ use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::ffi::{c_void, CString};
 use std::io::Write;
+use std::os::windows::prelude::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use sysinfo::{PidExt, ProcessExt, System, SystemExt};
 use uuid::Uuid;
+
 use windows::Win32::System::Diagnostics::Debug as WinDbg;
 use windows_sys::Win32::System::SystemServices as WinSys;
+use windows_sys::Win32::System::Threading as WinThread;
 
 fn main() -> anyhow::Result<()> {
     println!("hello world");
 
     let start = std::time::Instant::now();
-    sln_from_exe()?;
+    //sln_from_exe()?;
+    sln_from_pid("firefox.exe")?;
     let end = std::time::Instant::now();
     println!("Elapsed Milliseconds: {}", (end - start).as_millis());
 
@@ -24,11 +29,95 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn sln_from_pid(name: &str) -> anyhow::Result<()> {
+    // Find process
+    let s = sysinfo::System::new_all();
+    let (pid, proc) = s
+        .processes()
+        .iter()
+        .filter(|(pid, proc)| proc.name() == name)
+        .next()
+        .ok_or_else(|| anyhow!("No proc containing {name}"))?;
+    println!("{pid} {}", proc.name());
+
+    // Get handle to process
+    let handle = unsafe {
+        WinThread::OpenProcess(
+            WinThread::PROCESS_QUERY_INFORMATION | WinThread::PROCESS_VM_READ,
+            0,
+            pid.as_u32(),
+        )
+    };
+
+    if handle == 0 {
+        anyhow::bail!("Failed to open pid/process [{}]/[{}]", pid, proc.name());
+    }
+    println!("handle: {:?}", handle);
+
+    // Find modules
+    const MAX_MODULE_HANDES: usize = 4096;
+    let mut module_handles: [isize; MAX_MODULE_HANDES] = [0; MAX_MODULE_HANDES];
+    unsafe {
+        let mut bytes_needed: u32 = 0;
+        let result = windows_sys::Win32::System::ProcessStatus::EnumProcessModules(
+            handle,
+            module_handles.as_mut_ptr(),
+            (std::mem::size_of::<isize>() * MAX_MODULE_HANDES) as u32,
+            &mut bytes_needed,
+        );
+        if result == 0 {
+            anyhow::bail!(
+                "Failed to enumerate modules. Result: [{result}] Last Error: [{}]",
+                std::io::Error::last_os_error()
+            );
+        }
+
+        let num_modules = (bytes_needed as usize / std::mem::size_of::<isize>()) as usize;
+        for i in 0..num_modules {
+            const MAX_PATH: usize = windows_sys::Win32::Foundation::MAX_PATH as usize;
+            let mut sz_mod_name: [u16; MAX_PATH] = [0; MAX_PATH];
+            if windows_sys::Win32::System::ProcessStatus::GetModuleFileNameExW(
+                handle,
+                module_handles[i as usize],
+                sz_mod_name.as_mut_ptr(),
+                MAX_PATH as u32,
+            ) != 0
+            {
+                let module_name = std::ffi::OsString::from_wide(&sz_mod_name);
+                println!("module: {}", module_name.to_string_lossy());
+            }
+        }
+
+        // {
+        //     let num_modules = cb_needed / std::mem::size_of::<HMODULE>() as u32;
+        //     for i in 0..num_modules {
+        //         let mut sz_mod_name: [u16; MAX_PATH] = [0; MAX_PATH];
+        //         if GetModuleFileNameExW(
+        //             h_process,
+        //             h_mods[i as usize],
+        //             sz_mod_name.as_mut_ptr(),
+        //             MAX_PATH as DWORD
+        //         ) != 0
+        //         {
+        //             module_list.push(OsString::from_wide(&sz_mod_name));
+        //         }
+        //     }
+        // }
+    }
+
+    // Cleanup
+    unsafe {
+        windows_sys::Win32::Foundation::CloseHandle(handle);
+    }
+
+    Ok(())
+}
+
 fn sln_from_exe() -> anyhow::Result<()> {
     // Define target
     //let test_target : PathBuf = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe".into();
     //let test_target : PathBuf = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe".into();
-    let test_target : PathBuf = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe".into();
+    let test_target: PathBuf = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe".into();
 
     let user_roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1/".into()];
     let exclude_dirs: Vec<String> = ["Visual Studio".into(), "Windows Kits".into()].into_iter().collect();
@@ -111,7 +200,6 @@ fn sln_from_exe() -> anyhow::Result<()> {
     file.write_all("VisualStudioVersion = 17.5.33424.131\n".as_bytes())?;
     file.write_all("MinimumVisualStudioVersion = 10.0.40219.1\n".as_bytes())?;
 
-
     // exe project
     let sln_id = Uuid::new_v4();
     file.write_all(
@@ -127,7 +215,13 @@ fn sln_from_exe() -> anyhow::Result<()> {
     file.write_all("\t\tPortSupplier = 00000000-0000-0000-0000-000000000000\n".as_bytes())?;
     file.write_all(format!("\t\tExecutable = {}\n", test_target.to_string_lossy()).as_bytes())?;
     file.write_all("\t\tRemoteMachine = DESKTOP-1U7T4L2\n".as_bytes())?;
-    file.write_all(format!("\t\tStartingDirectory = {}\n", test_target.parent().unwrap().to_string_lossy()).as_bytes())?;
+    file.write_all(
+        format!(
+            "\t\tStartingDirectory = {}\n",
+            test_target.parent().unwrap().to_string_lossy()
+        )
+        .as_bytes(),
+    )?;
     file.write_all("\t\tEnvironment = Default\n".as_bytes())?;
     file.write_all("\t\tLaunchingEngine = 00000000-0000-0000-0000-000000000000\n".as_bytes())?;
     file.write_all("\t\tUseLegacyDebugEngines = No\n".as_bytes())?;
