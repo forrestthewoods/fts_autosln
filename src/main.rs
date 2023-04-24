@@ -75,7 +75,7 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
         }
 
         let num_modules = (bytes_needed as usize / std::mem::size_of::<isize>()) as usize;
-        for i in 0..num_modules {
+        for i in 0..num_modules.min(1) {
             const MAX_PATH: usize = windows_sys::Win32::Foundation::MAX_PATH as usize;
             let mut sz_mod_name: [u16; MAX_PATH] = [0; MAX_PATH];
             if windows_sys::Win32::System::ProcessStatus::GetModuleFileNameExW(
@@ -91,36 +91,57 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
         }
 
         // Set options before initialize
-        WinDbg::SymSetOptions(WinDbg::SYMOPT_UNDNAME | WinDbg::SYMOPT_DEFERRED_LOADS);
+        WinDbg::SymSetOptions(WinDbg::SYMOPT_LOAD_LINES);
+        //WinDbg::SymSetOptions(WinDbg::SYMOPT_UNDNAME | WinDbg::SYMOPT_DEFERRED_LOADS);
 
         // Initialize symbols, including loaded modules
         let success = WinDbg::SymInitialize(process_handle2, windows::core::PCSTR::null(), true);
         println!("SymInitialize result: [{success:?}]");
 
         let module_handle = module_handles[0];
-        
+
         let mut module_info = ModuleInfo {
             lpBaseOfDll: std::ptr::null_mut(),
             SizeOfImage: 0,
-            EntryPoint: std::ptr::null_mut()};
+            EntryPoint: std::ptr::null_mut(),
+        };
 
-        let result = 
-            windows_sys::Win32::System::ProcessStatus::GetModuleInformation(
-                process_handle,
-                module_handle,
-                &mut module_info,
-                std::mem::size_of::<ModuleInfo>() as u32,
-            );
+        let result = windows_sys::Win32::System::ProcessStatus::GetModuleInformation(
+            process_handle,
+            module_handle,
+            &mut module_info,
+            std::mem::size_of::<ModuleInfo>() as u32,
+        );
 
-        println!("GetModuleInformation result: [{result:?}] Base: [{:?}]", module_info.lpBaseOfDll);
+        println!(
+            "GetModuleInformation result: [{result:?}] Base: [{:?}]",
+            module_info.lpBaseOfDll
+        );
+
+        // Force symbol load
+        let hack = CString::new("C:\\ue511\\UE_5.1\\Engine\\Binaries\\Win64\\UnrealEditor.exe")?;
+        let hack2 = windows::core::PCSTR(hack.as_ptr() as *const u8);
+
+        let result = WinDbg::SymLoadModuleEx(
+            process_handle2,
+            windows::Win32::Foundation::HANDLE(0),
+            hack2,
+            windows::core::PCSTR::null(),
+            0, //module_info.lpBaseOfDll as u64, // not required?
+            0,
+            None,
+            WinDbg::SLMFLAG_NONE,
+        );
+        println!("SymLoadModuleEx result: [{result}]");
 
         // Get Symbols
-        let mut pdb_image : WinDbg::IMAGEHLP_MODULE64 = Default::default();
+        let mut pdb_image: WinDbg::IMAGEHLP_MODULE64 = Default::default();
+        pdb_image.SizeOfStruct = std::mem::size_of::<WinDbg::IMAGEHLP_MODULE64>() as u32;
         let result = WinDbg::SymGetModuleInfo64(process_handle2, module_info.lpBaseOfDll as u64, &mut pdb_image);
         println!("SymGetModuleInfo64 result: [{result:?}]");
 
         if result.0 == 1 {
-            let pdb_path = String::from_utf8(pdb_image.LoadedImageName.to_vec());
+            let pdb_path = String::from_utf8(pdb_image.LoadedPdbName.to_vec());
             println!("pdb path: [{pdb_path:?}]");
         }
 
