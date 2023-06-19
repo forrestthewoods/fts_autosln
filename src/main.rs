@@ -23,6 +23,7 @@ use windows_sys::Win32::System::Threading as WinThread;
 // --sln-path c:/temp/ue_exe/UnrealEditor.sln -r "C:\Program Files\Epic Games\UE_5.1" from-file "C:\Program Files\Epic Games\UE_5.1\Engine\Binaries\Win64\UnrealEditor.exe"
 // --sln-path c:/temp/ue_pid/UnrealEditor.sln -r "C:\Program Files\Epic Games\UE_5.1" from-process-name UnrealEditor.exe
 // --sln-path c:/temp/rust_exe/Autosln.sln from-file C:\source_control\fts_autosln\target\debug\deps\fts_autosln.exe
+// --sln-path c:/temp/cpp_sln/CppStuff.sln from-file C:\temp\cpp\autosln_tests\x64\Debug\autosln_tests.exe
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -74,13 +75,20 @@ fn main() -> anyhow::Result<()> {
 
     // Run command
     let start = std::time::Instant::now();
+
+    let mut exclude_dirs = args.exclude_dirs.unwrap_or_default();
+    if args.exclude_common_files {
+        exclude_dirs.push("Visual Studio".into());
+        exclude_dirs.push("Windows Kits".into());
+    }
+
     match &args.command {
         Commands::FromFile { exe_path } => {
             sln_from_exe(
                 &exe_path,
                 &args.sln_path,
                 &args.source_roots.unwrap_or_default(),
-                &args.exclude_dirs.unwrap_or_default(),
+                &exclude_dirs,
             )?;
         }
         Commands::FromProcessName {
@@ -93,7 +101,7 @@ fn main() -> anyhow::Result<()> {
                 &process_name,
                 &args.sln_path,
                 &args.source_roots.unwrap_or_default(),
-                &args.exclude_dirs.unwrap_or_default(),
+                &exclude_dirs,
                 *include_nt_symbol_path,
                 extra_symbol_servers.as_ref().unwrap_or(&empty)
             )?;
@@ -562,10 +570,12 @@ fn to_local_file(
     }
 }
 
-fn find_all_pdbs(target: &Path) -> anyhow::Result<Vec<PathBuf>> {
+fn find_all_pdbs(exe_path: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    anyhow::ensure!(file_exists(exe_path), "exe file does not exist: [{}]", exe_path.to_string_lossy());
+
     let mut pdbs: Vec<PathBuf> = Default::default();
 
-    let mut open_list: Vec<(PathBuf, PathBuf)> = vec![split_filepath(target)?];
+    let mut open_list: Vec<(PathBuf, PathBuf)> = vec![split_filepath(exe_path)?];
     let mut closed_list: HashSet<PathBuf> = Default::default();
 
     while !open_list.is_empty() {
