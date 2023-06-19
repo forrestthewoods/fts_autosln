@@ -20,6 +20,7 @@ use windows_sys::Win32::System::SystemServices as WinSys;
 use windows_sys::Win32::System::Threading as WinThread;
 
 // Example usage:
+// --sln-path c:/temp/ue_exe/UnrealEditor.sln -r "C:\Program Files\Epic Games\UE_5.1" from-file "C:\Program Files\Epic Games\UE_5.1\Engine\Binaries\Win64\UnrealEditor.exe"
 // --sln-path c:/temp/ue_pid/UnrealEditor.sln -r "C:\Program Files\Epic Games\UE_5.1" from-process-name UnrealEditor.exe
 // --sln-path c:/temp/rust_exe/Autosln.sln from-file C:\source_control\fts_autosln\target\debug\deps\fts_autosln.exe
 
@@ -327,7 +328,7 @@ fn build_sln(
     std::fs::create_dir_all(sln_dir)?;
     let mut sln_path = sln_dir.join(sln_name);
     sln_path.set_extension("sln");
-    println!("Writing sln - [{}]", sln_path.to_string_lossy());
+    println!("Writing sln: [{}]", sln_path.to_string_lossy());
 
     let mut file = std::fs::File::create(sln_path)?;
     file.write_all("\n".as_bytes())?; // empty newline
@@ -398,7 +399,7 @@ fn build_sln(
     // Write vcxproj
     let mut vcxproj_path = sln_dir.join(sln_name);
     vcxproj_path.set_extension("vcxproj");
-    println!("Writing vcxproj - [{}", vcxproj_path.to_string_lossy());
+    println!("Writing vcxproj: [{}", vcxproj_path.to_string_lossy());
 
     let mut file = std::fs::File::create(vcxproj_path)?;
     file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
@@ -417,7 +418,6 @@ fn build_sln(
     file.write_all("    <VCProjectVersion>16.0</VCProjectVersion>\n".as_bytes())?;
     file.write_all("    <Keyword>Win32Proj</Keyword>\n".as_bytes())?;
     file.write_all(format!("    <ProjectGuid>{{{}}}</ProjectGuid>\n", vcxproj_id).as_bytes())?;
-    file.write_all("    <RootNamespace>autoslntests</RootNamespace>\n".as_bytes())?;
     file.write_all("    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>\n".as_bytes())?;
     file.write_all("  </PropertyGroup>\n".as_bytes())?;
 
@@ -440,7 +440,7 @@ fn build_sln(
     // Write vcxproj.filters
     let mut filters_path = sln_dir.join(sln_name);
     filters_path.set_extension("vcxproj.filters");
-    println!("Writing vcxproj.filters - [{}", filters_path.to_string_lossy());
+    println!("Writing vcxproj.filters: [{}", filters_path.to_string_lossy());
 
     let mut file = std::fs::File::create(filters_path)?;
     file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
@@ -567,6 +567,7 @@ fn find_all_pdbs(target: &Path) -> anyhow::Result<Vec<PathBuf>> {
         let pdb_metadata = std::fs::metadata(&pdb_path);
         if let Ok(meta) = pdb_metadata {
             if meta.is_file() {
+                println!("Found PDB: [{}]", pdb_path.to_string_lossy());
                 pdbs.push(pdb_path);
             }
         }
