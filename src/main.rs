@@ -65,7 +65,21 @@ enum Commands {
         #[arg(short = 'n', long = "nt_symbols", default_value_t = false)]
         include_nt_symbol_path: bool,
 
-        /// Extra symbol server to includee in search path
+        /// Extra symbol server to include in search path
+        #[arg(short = 's', long)]
+        extra_symbol_servers: Option<Vec<String>>,
+    },
+
+    /// Builds SLN from a specific pid
+    FromPid {
+        /// pid of process; example: 23272
+        pid: usize,
+
+        /// Include _NT_SYMBOL_PATH in symbol search path (default = false)
+        #[arg(short = 'n', long = "nt_symbols", default_value_t = false)]
+        include_nt_symbol_path: bool,
+
+        /// Extra symbol server to include in search path
         #[arg(short = 's', long)]
         extra_symbol_servers: Option<Vec<String>>,
     },
@@ -99,14 +113,27 @@ fn main() -> anyhow::Result<()> {
             include_nt_symbol_path,
             extra_symbol_servers,
         } => {
-            let empty : Vec<String> = Default::default();
             sln_from_process_name(
                 &process_name,
                 &args.sln_path,
                 &args.source_roots.unwrap_or_default(),
                 &exclude_dirs,
                 *include_nt_symbol_path,
-                extra_symbol_servers.as_ref().unwrap_or(&empty)
+                extra_symbol_servers.as_ref().unwrap_or(&Default::default()),
+            )?;
+        }
+        Commands::FromPid {
+            pid,
+            include_nt_symbol_path,
+            extra_symbol_servers,
+        } => {
+            sln_from_pid(
+                *pid,
+                &args.sln_path,
+                &args.source_roots.unwrap_or_default(),
+                &exclude_dirs,
+                *include_nt_symbol_path,
+                extra_symbol_servers.as_ref().unwrap_or(&Default::default()),
             )?;
         }
     }
@@ -117,13 +144,39 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn sln_from_pid(
+    pid: usize,
+    sln_path: &Path,
+    source_roots: &[PathBuf],
+    exclude_dirs: &[String],
+    include_nt_symbol_path: bool,
+    extra_symbol_servers: &[String],
+) -> anyhow::Result<()> {
+    let s = sysinfo::System::new_all();
+
+    let pid = sysinfo::Pid::from(pid);
+    let proc = s
+        .process(pid)
+        .ok_or_else(|| anyhow!("Failed to find process for pid [{pid}]"))?;
+
+    return sln_from_pid_proc(
+        &pid,
+        &proc,
+        sln_path,
+        source_roots,
+        exclude_dirs,
+        include_nt_symbol_path,
+        extra_symbol_servers,
+    );
+}
+
 fn sln_from_process_name(
     process_name: &str,
     sln_path: &Path,
     source_roots: &[PathBuf],
     exclude_dirs: &[String],
     include_nt_symbol_path: bool,
-    extra_symbol_servers: &[String]
+    extra_symbol_servers: &[String],
 ) -> anyhow::Result<()> {
     // Find process
     let s = sysinfo::System::new_all();
@@ -133,8 +186,27 @@ fn sln_from_process_name(
         .filter(|(_, proc)| proc.name() == process_name)
         .next()
         .ok_or_else(|| anyhow!("No proc containing {process_name}"))?;
-    println!("{pid} {}", proc.name());
 
+    return sln_from_pid_proc(
+        pid,
+        proc,
+        sln_path,
+        source_roots,
+        exclude_dirs,
+        include_nt_symbol_path,
+        extra_symbol_servers,
+    );
+}
+
+fn sln_from_pid_proc(
+    pid: &sysinfo::Pid,
+    proc: &sysinfo::Process,
+    sln_path: &Path,
+    source_roots: &[PathBuf],
+    exclude_dirs: &[String],
+    include_nt_symbol_path: bool,
+    extra_symbol_servers: &[String],
+) -> anyhow::Result<()> {
     // Get handle to process
     let process_handle = unsafe {
         WinThread::OpenProcess(
@@ -419,7 +491,7 @@ fn build_sln(
     file.write_all("EndGlobal\n".as_bytes())?;
 
     // Write vcxproj
-    let mut vcxproj_path : PathBuf = sln_dir.to_owned();
+    let mut vcxproj_path: PathBuf = sln_dir.to_owned();
     vcxproj_path.push(format!("{}_source_code.vcxproj", sln_name.to_string_lossy()));
     println!("Writing vcxproj: [{}]", vcxproj_path.to_string_lossy());
 
@@ -460,7 +532,7 @@ fn build_sln(
     file.write_all("</Project>\n".as_bytes())?;
 
     // Write vcxproj.filters
-    let mut filters_path : PathBuf = sln_dir.to_owned();
+    let mut filters_path: PathBuf = sln_dir.to_owned();
     filters_path.push(format!("{}_source_code.vcxproj.filters", sln_name.to_string_lossy()));
     println!("Writing vcxproj.filters: [{}]", filters_path.to_string_lossy());
 
@@ -574,7 +646,11 @@ fn to_local_file(
 }
 
 fn find_all_pdbs(exe_path: &Path) -> anyhow::Result<Vec<PathBuf>> {
-    anyhow::ensure!(file_exists(exe_path), "exe file does not exist: [{}]", exe_path.to_string_lossy());
+    anyhow::ensure!(
+        file_exists(exe_path),
+        "exe file does not exist: [{}]",
+        exe_path.to_string_lossy()
+    );
 
     let mut pdbs: Vec<PathBuf> = Default::default();
 
