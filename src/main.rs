@@ -1,4 +1,5 @@
 use anyhow::anyhow;
+use clap::{Parser, Subcommand};
 use dashmap::{DashMap, DashSet};
 use itertools::Itertools;
 use pdb::*;
@@ -10,38 +11,107 @@ use std::io::Write;
 use std::os::windows::prelude::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use sysinfo::{PidExt, ProcessExt, System, SystemExt};
+use sysinfo::{PidExt, ProcessExt, SystemExt};
 use uuid::Uuid;
 
-use windows::Win32::Foundation::BOOL;
 use windows::Win32::System::Diagnostics::Debug as WinDbg;
-use windows_sys::Win32::System::ProcessStatus::MODULEINFO as ModuleInfo;
-use windows_sys::Win32::System::ProcessStatus::{EnumProcessModules, GetModuleFileNameExW, GetModuleInformation};
+use windows_sys::Win32::System::ProcessStatus::{EnumProcessModules, GetModuleFileNameExW};
 use windows_sys::Win32::System::SystemServices as WinSys;
 use windows_sys::Win32::System::Threading as WinThread;
 
+// Example usage:
+// fts_autosln.exe --sln-path c:/temp/ue_pid/UnrealEditor.sln -r "C:\Program Files\Epic Games\UE_5.1" from-process-name UnrealEditor.exe
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+#[command(propagate_version = true)]
+struct Args {
+    /// Solution file to generate
+    #[arg(short, long)]
+    sln_path: PathBuf,
+
+    /// List of roots to search for source files
+    #[arg(short = 'r', long)]
+    source_roots: Option<Vec<PathBuf>>,
+
+    /// List of directories to exclude
+    #[arg(short, long)]
+    exclude_dirs: Option<Vec<String>>,
+
+    /// Exclude source files in "Visual Studio" or "Windows Kits" directories (default = true)
+    #[arg(long)]
+    #[arg(default_value_t = true)]
+    exclude_common_files: bool,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Builds SLN from a file on disk
+    FromFile { exe_path: PathBuf },
+
+    /// Builds SLN from a running process name
+    FromProcessName {
+        /// name of process; example: UnrealEditor.exe
+        process_name: String,
+
+        /// Include _NT_SYMBOL_PATH in symbol search path (default = true)
+        #[arg(short = 'n', long = "nt_symbols", default_value_t = true)]
+        include_nt_symbol_path: bool,
+    },
+}
+
 fn main() -> anyhow::Result<()> {
-    println!("hello world");
+    let args = Args::parse();
 
+    // Run command
     let start = std::time::Instant::now();
-    //sln_from_exe()?;
-    sln_from_pid("UnrealEditor.exe")?;
+    match &args.command {
+        Commands::FromFile { exe_path } => {
+            sln_from_exe(
+                &exe_path,
+                &args.sln_path,
+                &args.source_roots.unwrap_or_default(),
+                &args.exclude_dirs.unwrap_or_default(),
+            )?;
+        }
+        Commands::FromProcessName {
+            process_name,
+            include_nt_symbol_path,
+        } => {
+            sln_from_process_name(
+                &process_name,
+                &args.sln_path,
+                &args.source_roots.unwrap_or_default(),
+                &args.exclude_dirs.unwrap_or_default(),
+                *include_nt_symbol_path,
+            )?;
+        }
+    }
     let end = std::time::Instant::now();
-    println!("Elapsed Milliseconds: {}", (end - start).as_millis());
 
-    println!("goodbye cruel world");
+    // Success!
+    println!("Elapsed Milliseconds: {}", (end - start).as_millis());
     Ok(())
 }
 
-fn sln_from_pid(name: &str) -> anyhow::Result<()> {
+fn sln_from_process_name(
+    process_name: &str,
+    sln_path: &Path,
+    source_roots: &[PathBuf],
+    exclude_dirs: &[String],
+    include_nt_symbol_path: bool,
+) -> anyhow::Result<()> {
     // Find process
     let s = sysinfo::System::new_all();
     let (pid, proc) = s
         .processes()
         .iter()
-        .filter(|(pid, proc)| proc.name() == name)
+        .filter(|(_, proc)| proc.name() == process_name)
         .next()
-        .ok_or_else(|| anyhow!("No proc containing {name}"))?;
+        .ok_or_else(|| anyhow!("No proc containing {process_name}"))?;
     println!("{pid} {}", proc.name());
 
     // Get handle to process
@@ -52,16 +122,16 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
             pid.as_u32(),
         )
     };
-
-    if process_handle == 0 {
-        anyhow::bail!("Failed to open pid/process [{}]/[{}]", pid, proc.name());
-    }
-
-    println!("handle: {:?}", process_handle);
+    anyhow::ensure!(
+        process_handle != 0,
+        "Failed to open pid/process [{}]/[{}]",
+        pid,
+        proc.name()
+    );
     let process_handle2 = windows::Win32::Foundation::HANDLE(process_handle);
 
     // Get PDB paths
-    let mut pdb_paths : Vec<PathBuf> = Default::default();
+    let mut pdb_paths: Vec<PathBuf> = Default::default();
     unsafe {
         // Find modules
         const MAX_MODULE_HANDES: usize = 16384;
@@ -83,9 +153,6 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
 
         // Get module directories
         let mut module_dirs: HashSet<PathBuf> = Default::default();
-
-        let windows_dirname = OsString::from("windows");
-        let system32_dirname = OsString::from("system32");
         let num_modules = (bytes_needed as usize / std::mem::size_of::<isize>()) as usize;
         for i in 0..num_modules {
             const MAX_PATH: usize = windows_sys::Win32::Foundation::MAX_PATH as usize;
@@ -99,34 +166,25 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
             ) != 0
             {
                 let module_name = OsString::from_wide(&sz_mod_name);
-                //println!("    module: {}", module_name.to_string_lossy());
-
                 let module_path: PathBuf = module_name.into();
-
                 let module_dir: PathBuf = module_path
                     .parent()
                     .ok_or_else(|| anyhow!("Couldn't get parent dir from {:?}", module_path))?
                     .into();
 
-                // Ignore windows/System32
-                let skip = module_dir
-                    .components()
-                    .tuples()
-                    .any(|(a, b)| windows_dirname.eq_ignore_ascii_case(a) && system32_dirname.eq_ignore_ascii_case(b));
-                if skip {
-                    continue;
-                }
-
-                // Store module dir and filepath
+                // Store module dir
+                println!("Found Loaded Module: [{}]", module_path.to_string_lossy());
                 module_dirs.insert(module_dir);
             }
         }
 
         // Build the PDB search path
         let mut search_path: String = module_dirs.iter().map(|d| d.to_string_lossy()).join(";");
-        if let Ok(nt_symbol_path) = env::var("_NT_SYMBOL_PATH") {
-            search_path.push(';');
-            search_path.push_str(&nt_symbol_path);
+        if include_nt_symbol_path {
+            if let Ok(nt_symbol_path) = env::var("_NT_SYMBOL_PATH") {
+                search_path.push(';');
+                search_path.push_str(&nt_symbol_path);
+            }
         }
 
         let search_path_cstr = path_to_cstring(&OsString::from(&search_path)).unwrap();
@@ -136,21 +194,28 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
         WinDbg::SymSetOptions(WinDbg::SYMOPT_DEBUG);
 
         // Initialize symbols, including loaded modules
-        let success = WinDbg::SymInitialize(process_handle2, search_path_pcstr, true);
-        println!("SymInitialize result: [{success:?}]");
+        println!("Loading symbols... (this may take time)");
+        println!("    Symbol Search Path: {}", &search_path);
+        let symbols_initialized = WinDbg::SymInitialize(process_handle2, search_path_pcstr, true).0 == 1;
+        anyhow::ensure!(
+            symbols_initialized,
+            "SymInitialize failed.  Last Error: [{}]",
+            std::io::Error::last_os_error()
+        );
 
         // Iterate modules
         for i in 0..num_modules {
             // Get PDB path
             let mut pdb_image: WinDbg::IMAGEHLP_MODULE64 = Default::default();
             pdb_image.SizeOfStruct = std::mem::size_of::<WinDbg::IMAGEHLP_MODULE64>() as u32;
-            let success : bool = WinDbg::SymGetModuleInfo64(process_handle2, module_handles[i] as u64, &mut pdb_image).0 == 1;
-            
+            let success: bool =
+                WinDbg::SymGetModuleInfo64(process_handle2, module_handles[i] as u64, &mut pdb_image).0 == 1;
+
             if success {
                 let path_bytes = pdb_image.LoadedPdbName.to_vec();
                 let path_string = String::from_utf8(path_bytes.clone())?.replace("\0", "");
                 if !path_string.is_empty() {
-                    println!("pdb path: [{}]", &path_string);
+                    println!("Found PDB: [{}]", &path_string);
                     pdb_paths.push(path_string.into());
                 }
             }
@@ -163,35 +228,32 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
         windows_sys::Win32::Foundation::CloseHandle(process_handle);
     }
 
-    let source_roots: Vec<PathBuf> = vec!["C:/Program Files/Epic Games/UE_5.1".into()];
-    let exclude_dirs: Vec<String> = ["Visual Studio".into(), "Windows Kits".into()].into_iter().collect();
-    let sln_name = PathBuf::from("sln_from_pid");
-    let sln_dir = PathBuf::from("c:/temp/foo_pid");
-    return build_sln(&sln_name, &sln_dir, proc.exe(), &pdb_paths, &source_roots, &exclude_dirs);
+    return build_sln(proc.exe(), &sln_path, &pdb_paths, &source_roots, &exclude_dirs);
 }
 
-fn sln_from_exe() -> anyhow::Result<()> {
-    // Define target
-    let test_target: PathBuf = "C:/Program Files/Epic Games/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe".into();
-    //let test_target : PathBuf = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe".into();
-    //let test_target: PathBuf = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe".into();
-
-    let source_roots: Vec<PathBuf> = vec!["C:/Program Files/Epic Games/UE_5.1".into()];
-    //let source_roots: Vec<PathBuf> = vec!["C:/source_control/fts_autosln".into()];
-    let exclude_dirs: Vec<String> = ["Visual Studio".into(), "Windows Kits".into()].into_iter().collect();
-
+fn sln_from_exe(
+    exe_path: &Path,
+    sln_path: &Path,
+    source_roots: &[PathBuf],
+    exclude_dirs: &[String],
+) -> anyhow::Result<()> {
     // Get PDBs for target
-    println!("Finding PDBs");
-    let pdbs = find_all_pdbs(&test_target)?;
+    println!("Finding PDBs for exe [{}]", exe_path.to_string_lossy());
+    let pdbs = find_all_pdbs(&exe_path)?;
 
-    let sln_name = PathBuf::from("sln_from_exe");
-    let sln_dir = PathBuf::from("c:/temp/foo_exe");
-    return build_sln(&sln_name, &sln_dir, &test_target, &pdbs, &source_roots, &exclude_dirs);
+    return build_sln(exe_path, &sln_path, &pdbs, &source_roots, &exclude_dirs);
 }
 
-fn build_sln(sln_name: &Path, sln_dir: &Path, exe_path: &Path, pdbs: &[PathBuf], source_roots: &[PathBuf], exclude_dirs: &[String]) -> anyhow::Result<()> {
-
+fn build_sln(
+    exe_path: &Path,
+    sln_path: &Path,
+    pdbs: &[PathBuf],
+    source_roots: &[PathBuf],
+    exclude_dirs: &[String],
+) -> anyhow::Result<()> {
     // Map PDB paths to local files
+    // This is done in parallel (via rayon par_iter)
+    // And uses a multi-threaded HashMap (DashMap) to cache
     println!("Finding local files");
     let processed_paths: Arc<DashSet<String>> = Default::default();
     let known_maps: Arc<DashMap<PathBuf, PathBuf>> = Default::default();
@@ -213,13 +275,12 @@ fn build_sln(sln_name: &Path, sln_dir: &Path, exe_path: &Path, pdbs: &[PathBuf],
                 }
 
                 if let Some(local_file) = to_local_file(filepath, &source_roots, &known_maps) {
-                    if exclude_dirs
-                        .iter()
-                        .any(|exclude| local_file.to_string_lossy().contains(exclude))
-                    {
+                    let lossy_local_file = local_file.to_string_lossy();
+                    if exclude_dirs.iter().any(|exclude| lossy_local_file.contains(exclude)) {
                         continue;
                     }
 
+                    // Clump all headers, hpp, and inl files into one filter
                     let ext = local_file.extension().unwrap_or_default();
                     if ext == "h" || ext == "hpp" || ext == "inl" {
                         headers.insert(local_file);
@@ -256,6 +317,12 @@ fn build_sln(sln_name: &Path, sln_dir: &Path, exe_path: &Path, pdbs: &[PathBuf],
         .collect();
 
     // Write solution
+    let sln_dir = sln_path
+        .parent()
+        .ok_or_else(|| anyhow!("Failed to get parent dir from sln path [{:?}]", sln_path))?;
+    let sln_name = sln_path
+        .file_stem()
+        .ok_or_else(|| anyhow!("Failed to get filename from sln path [{:?}]", sln_path))?;
     std::fs::create_dir_all(sln_dir)?;
     let mut sln_path = sln_dir.join(sln_name);
     sln_path.set_extension("sln");
@@ -449,7 +516,6 @@ fn to_local_file(
                 let tail = file.strip_prefix(src).ok()?;
                 let maybe_filepath = dst.join(tail);
                 if file_exists(&maybe_filepath) {
-                    //println!("it helped!");
                     return Some(maybe_filepath.to_owned());
                 }
             }
@@ -469,13 +535,10 @@ fn to_local_file(
 
             for user_root in user_roots {
                 let maybe_filepath = user_root.join(&relpath);
-                //println!("    {:?}", maybe_filepath);
                 if file_exists(&maybe_filepath) {
                     // create a new known map
                     let pdb_path: PathBuf = components.iter().take(idx as usize).collect();
-                    //println!("inserting {:?}, {:?}", pdb_path, user_root);
                     known_maps.insert(pdb_path, user_root.to_owned());
-
                     return Some(maybe_filepath);
                 }
             }
@@ -544,20 +607,7 @@ fn get_source_files(pdb: &PathBuf) -> anyhow::Result<Vec<PathBuf>> {
                 let raw_filepath = string_table.get(file.name)?;
                 let filename_utf8 = std::str::from_utf8(raw_filepath.as_bytes())?;
                 let filepath = PathBuf::from(filename_utf8);
-
-                // Verify file exists on disk
-                //                let roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1".into()];
-
-                if false {
-                    let file_meta = std::fs::metadata(&filepath);
-                    if let Ok(meta) = file_meta {
-                        if meta.is_file() {
-                            result.push(filepath);
-                        }
-                    }
-                } else {
-                    result.push(filepath);
-                }
+                result.push(filepath);
             }
         }
     }
@@ -565,6 +615,7 @@ fn get_source_files(pdb: &PathBuf) -> anyhow::Result<Vec<PathBuf>> {
     Ok(result)
 }
 
+// split into filename / directory
 fn split_filepath(path: &Path) -> anyhow::Result<(PathBuf, PathBuf)> {
     let filename = path
         .file_name()
@@ -676,10 +727,4 @@ fn path_to_cstring(path: &std::ffi::OsStr) -> Option<CString> {
     let mut null_terminated = Vec::with_capacity(bytes.len() + 1);
     null_terminated.extend_from_slice(bytes);
     CString::new(null_terminated).ok()
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn do_stuff() {}
 }

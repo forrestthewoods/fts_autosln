@@ -1,10 +1,17 @@
 [package]
 name = "fts_autosln"
+authors = ["Forrest Smith <forrestthewoods@gmail.com>"]
+description = "CLI tool to generate Visual Studio Solutions from PDBs"
+repository = "https://github.com/forrestthewoods/fts_autosln"
+keywords = ["visual studio"]
+categories = ["command-line-utilities"]
+license = "Unlicense OR MIT"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 anyhow = "1.0.70"
+clap = { version = "4.3.4", features = ["derive"] }
 dashmap = "5.4.0"
 itertools = "0.10.5"
 rayon = "1.7.0"
