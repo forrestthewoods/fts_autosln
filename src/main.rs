@@ -4,7 +4,8 @@ use itertools::Itertools;
 use pdb::*;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::ffi::{c_void, CString};
+use std::env;
+use std::ffi::{c_void, CString, OsString};
 use std::io::Write;
 use std::os::windows::prelude::OsStringExt;
 use std::path::{Path, PathBuf};
@@ -12,8 +13,10 @@ use std::sync::Arc;
 use sysinfo::{PidExt, ProcessExt, System, SystemExt};
 use uuid::Uuid;
 
+use windows::Win32::Foundation::BOOL;
 use windows::Win32::System::Diagnostics::Debug as WinDbg;
 use windows_sys::Win32::System::ProcessStatus::MODULEINFO as ModuleInfo;
+use windows_sys::Win32::System::ProcessStatus::{EnumProcessModules, GetModuleFileNameExW, GetModuleInformation};
 use windows_sys::Win32::System::SystemServices as WinSys;
 use windows_sys::Win32::System::Threading as WinThread;
 
@@ -49,117 +52,108 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
             pid.as_u32(),
         )
     };
-    let process_handle2 = windows::Win32::Foundation::HANDLE(process_handle);
 
     if process_handle == 0 {
         anyhow::bail!("Failed to open pid/process [{}]/[{}]", pid, proc.name());
     }
+
     println!("handle: {:?}", process_handle);
+    let process_handle2 = windows::Win32::Foundation::HANDLE(process_handle);
 
     // Find modules
-    const MAX_MODULE_HANDES: usize = 4096;
+    const MAX_MODULE_HANDES: usize = 16384;
     let mut module_handles: [isize; MAX_MODULE_HANDES] = [0; MAX_MODULE_HANDES];
+    let mut module_handle_names : HashMap<usize, PathBuf> = Default::default();
+    let mut num_modules = 0;
     unsafe {
+        // Enumerate modules
         let mut bytes_needed: u32 = 0;
-        let result = windows_sys::Win32::System::ProcessStatus::EnumProcessModules(
+        let result = EnumProcessModules(
             process_handle,
             module_handles.as_mut_ptr(),
             (std::mem::size_of::<isize>() * MAX_MODULE_HANDES) as u32,
             &mut bytes_needed,
         );
-        if result == 0 {
-            anyhow::bail!(
-                "Failed to enumerate modules. Result: [{result}] Last Error: [{}]",
-                std::io::Error::last_os_error()
-            );
-        }
+        anyhow::ensure!(
+            result != 0,
+            "Failed to enumerate modules. Result: [{result}] Last Error: [{}]",
+            std::io::Error::last_os_error()
+        );
 
-        let num_modules = (bytes_needed as usize / std::mem::size_of::<isize>()) as usize;
-        for i in 0..num_modules.min(1) {
+        // Get module directories
+        let mut module_dirs: HashSet<PathBuf> = Default::default();
+
+        let windows_dirname = OsString::from("windows");
+        let system32_dirname = OsString::from("system32");
+        num_modules = (bytes_needed as usize / std::mem::size_of::<isize>()) as usize;
+        for i in 0..num_modules {
             const MAX_PATH: usize = windows_sys::Win32::Foundation::MAX_PATH as usize;
             let mut sz_mod_name: [u16; MAX_PATH] = [0; MAX_PATH];
-            if windows_sys::Win32::System::ProcessStatus::GetModuleFileNameExW(
+
+            if GetModuleFileNameExW(
                 process_handle,
                 module_handles[i as usize],
                 sz_mod_name.as_mut_ptr(),
                 MAX_PATH as u32,
             ) != 0
             {
-                let module_name = std::ffi::OsString::from_wide(&sz_mod_name);
-                println!("module: {}", module_name.to_string_lossy());
+                let module_name = OsString::from_wide(&sz_mod_name);
+                //println!("    module: {}", module_name.to_string_lossy());
+
+                let module_path: PathBuf = module_name.into();
+                module_handle_names.insert(i, module_path.clone());
+
+                let module_dir: PathBuf = module_path
+                    .parent()
+                    .ok_or_else(|| anyhow!("Couldn't get parent dir from {:?}", module_path))?
+                    .into();
+
+                // Ignore windows/System32
+                let skip = module_dir
+                    .components()
+                    .tuples()
+                    .any(|(a, b)| windows_dirname.eq_ignore_ascii_case(a) && system32_dirname.eq_ignore_ascii_case(b));
+                if skip {
+                    continue;
+                }
+
+                // Store module dir and filepath
+                module_dirs.insert(module_dir);
             }
         }
 
-        // Set options before initialize
-        WinDbg::SymSetOptions(WinDbg::SYMOPT_LOAD_LINES);
-        //WinDbg::SymSetOptions(WinDbg::SYMOPT_UNDNAME | WinDbg::SYMOPT_DEFERRED_LOADS);
-
-        // Initialize symbols, including loaded modules
-        let success = WinDbg::SymInitialize(process_handle2, windows::core::PCSTR::null(), true);
-        println!("SymInitialize result: [{success:?}]");
-
-        let module_handle = module_handles[0];
-
-        let mut module_info = ModuleInfo {
-            lpBaseOfDll: std::ptr::null_mut(),
-            SizeOfImage: 0,
-            EntryPoint: std::ptr::null_mut(),
-        };
-
-        let result = windows_sys::Win32::System::ProcessStatus::GetModuleInformation(
-            process_handle,
-            module_handle,
-            &mut module_info,
-            std::mem::size_of::<ModuleInfo>() as u32,
-        );
-
-        println!(
-            "GetModuleInformation result: [{result:?}] Base: [{:?}]",
-            module_info.lpBaseOfDll
-        );
-
-        // Force symbol load
-        let hack = CString::new("C:\\ue511\\UE_5.1\\Engine\\Binaries\\Win64\\UnrealEditor.exe")?;
-        let hack2 = windows::core::PCSTR(hack.as_ptr() as *const u8);
-
-        let result = WinDbg::SymLoadModuleEx(
-            process_handle2,
-            windows::Win32::Foundation::HANDLE(0),
-            hack2,
-            windows::core::PCSTR::null(),
-            0, //module_info.lpBaseOfDll as u64, // not required?
-            0,
-            None,
-            WinDbg::SLMFLAG_NONE,
-        );
-        println!("SymLoadModuleEx result: [{result}]");
-
-        // Get Symbols
-        let mut pdb_image: WinDbg::IMAGEHLP_MODULE64 = Default::default();
-        pdb_image.SizeOfStruct = std::mem::size_of::<WinDbg::IMAGEHLP_MODULE64>() as u32;
-        let result = WinDbg::SymGetModuleInfo64(process_handle2, module_info.lpBaseOfDll as u64, &mut pdb_image);
-        println!("SymGetModuleInfo64 result: [{result:?}]");
-
-        if result.0 == 1 {
-            let pdb_path = String::from_utf8(pdb_image.LoadedPdbName.to_vec());
-            println!("pdb path: [{pdb_path:?}]");
+        // Build the PDB search path
+        let mut search_path: String = module_dirs.iter().map(|d| d.to_string_lossy()).join(";");
+        if let Ok(nt_symbol_path) = env::var("_NT_SYMBOL_PATH") {
+            search_path.push(';');
+            search_path.push_str(&nt_symbol_path);
         }
 
-        // {
-        //     let num_modules = cb_needed / std::mem::size_of::<HMODULE>() as u32;
-        //     for i in 0..num_modules {
-        //         let mut sz_mod_name: [u16; MAX_PATH] = [0; MAX_PATH];
-        //         if GetModuleFileNameExW(
-        //             h_process,
-        //             h_mods[i as usize],
-        //             sz_mod_name.as_mut_ptr(),
-        //             MAX_PATH as DWORD
-        //         ) != 0
-        //         {
-        //             module_list.push(OsString::from_wide(&sz_mod_name));
-        //         }
-        //     }
-        // }
+        let search_path_cstr = path_to_cstring(&OsString::from(&search_path)).unwrap();
+        let search_path_pcstr = windows::core::PCSTR(search_path_cstr.as_ptr() as *const u8);
+
+        // Set options before initialize
+        WinDbg::SymSetOptions(WinDbg::SYMOPT_DEBUG);
+
+        // Initialize symbols, including loaded modules
+        let success = WinDbg::SymInitialize(process_handle2, search_path_pcstr, true);
+        println!("SymInitialize result: [{success:?}]");
+
+        // Iterate modules
+        for i in 0..num_modules {
+            // Get PDB path
+            let mut pdb_image: WinDbg::IMAGEHLP_MODULE64 = Default::default();
+            pdb_image.SizeOfStruct = std::mem::size_of::<WinDbg::IMAGEHLP_MODULE64>() as u32;
+            let success : bool = WinDbg::SymGetModuleInfo64(process_handle2, module_handles[i] as u64, &mut pdb_image).0 == 1;
+            
+            if success {
+                let path_bytes = pdb_image.LoadedPdbName.to_vec();
+                let path_string = String::from_utf8(path_bytes.clone())?.replace("\0", "");
+                if !path_string.is_empty() {
+                    println!("pdb path: [{}]", &path_string);
+                }
+            }
+        }
     }
 
     // Cleanup
@@ -173,11 +167,11 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
 
 fn sln_from_exe() -> anyhow::Result<()> {
     // Define target
-    //let test_target : PathBuf = "C:/ue511/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe".into();
+    let test_target: PathBuf = "C:/Program Files/Epic Games/UE_5.1/Engine/Binaries/Win64/UnrealEditor.exe".into();
     //let test_target : PathBuf = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe".into();
-    let test_target: PathBuf = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe".into();
+    //let test_target: PathBuf = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe".into();
 
-    let user_roots: Vec<PathBuf> = vec!["C:/ue511/UE_5.1/".into()];
+    let user_roots: Vec<PathBuf> = vec!["C:/Program Files/Epic Games/UE_5.1".into()];
     let exclude_dirs: Vec<String> = ["Visual Studio".into(), "Windows Kits".into()].into_iter().collect();
 
     // Get PDBs for target
