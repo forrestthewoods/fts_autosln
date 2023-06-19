@@ -41,7 +41,7 @@ struct Args {
     #[arg(short, long)]
     exclude_dirs: Option<Vec<String>>,
 
-    /// Exclude files under "system" directories
+    /// Exclude files under "system" directories;
     /// "Visual Studio", "Windows Kits", ".cargo", ".rustup"
     #[arg(long)]
     #[arg(default_value_t = true)]
