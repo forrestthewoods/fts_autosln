@@ -20,7 +20,8 @@ use windows_sys::Win32::System::SystemServices as WinSys;
 use windows_sys::Win32::System::Threading as WinThread;
 
 // Example usage:
-// fts_autosln.exe --sln-path c:/temp/ue_pid/UnrealEditor.sln -r "C:\Program Files\Epic Games\UE_5.1" from-process-name UnrealEditor.exe
+// --sln-path c:/temp/ue_pid/UnrealEditor.sln -r "C:\Program Files\Epic Games\UE_5.1" from-process-name UnrealEditor.exe
+// --sln-path c:/temp/rust_exe/Autosln.sln from-file C:\source_control\fts_autosln\target\debug\deps\fts_autosln.exe
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
