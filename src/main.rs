@@ -41,7 +41,8 @@ struct Args {
     #[arg(short, long)]
     exclude_dirs: Option<Vec<String>>,
 
-    /// Exclude source files in "Visual Studio" or "Windows Kits" directories (default = true)
+    /// Exclude files under "system" directories
+    /// "Visual Studio", "Windows Kits", ".cargo", ".rustup"
     #[arg(long)]
     #[arg(default_value_t = true)]
     exclude_common_files: bool,
@@ -80,6 +81,8 @@ fn main() -> anyhow::Result<()> {
     if args.exclude_common_files {
         exclude_dirs.push("Visual Studio".into());
         exclude_dirs.push("Windows Kits".into());
+        exclude_dirs.push(".cargo".into());
+        exclude_dirs.push(".rustup".into());
     }
 
     match &args.command {
