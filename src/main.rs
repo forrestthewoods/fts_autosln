@@ -60,12 +60,13 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
     println!("handle: {:?}", process_handle);
     let process_handle2 = windows::Win32::Foundation::HANDLE(process_handle);
 
-    // Find modules
-    const MAX_MODULE_HANDES: usize = 16384;
-    let mut module_handles: [isize; MAX_MODULE_HANDES] = [0; MAX_MODULE_HANDES];
-    let mut module_handle_names : HashMap<usize, PathBuf> = Default::default();
-    let mut num_modules = 0;
+    // Get PDB paths
+    let mut pdb_paths : Vec<PathBuf> = Default::default();
     unsafe {
+        // Find modules
+        const MAX_MODULE_HANDES: usize = 16384;
+        let mut module_handles: [isize; MAX_MODULE_HANDES] = [0; MAX_MODULE_HANDES];
+
         // Enumerate modules
         let mut bytes_needed: u32 = 0;
         let result = EnumProcessModules(
@@ -85,7 +86,7 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
 
         let windows_dirname = OsString::from("windows");
         let system32_dirname = OsString::from("system32");
-        num_modules = (bytes_needed as usize / std::mem::size_of::<isize>()) as usize;
+        let num_modules = (bytes_needed as usize / std::mem::size_of::<isize>()) as usize;
         for i in 0..num_modules {
             const MAX_PATH: usize = windows_sys::Win32::Foundation::MAX_PATH as usize;
             let mut sz_mod_name: [u16; MAX_PATH] = [0; MAX_PATH];
@@ -101,7 +102,6 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
                 //println!("    module: {}", module_name.to_string_lossy());
 
                 let module_path: PathBuf = module_name.into();
-                module_handle_names.insert(i, module_path.clone());
 
                 let module_dir: PathBuf = module_path
                     .parent()
@@ -151,6 +151,7 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
                 let path_string = String::from_utf8(path_bytes.clone())?.replace("\0", "");
                 if !path_string.is_empty() {
                     println!("pdb path: [{}]", &path_string);
+                    pdb_paths.push(path_string.into());
                 }
             }
         }
@@ -162,7 +163,11 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
         windows_sys::Win32::Foundation::CloseHandle(process_handle);
     }
 
-    Ok(())
+    let source_roots: Vec<PathBuf> = vec!["C:/Program Files/Epic Games/UE_5.1".into()];
+    let exclude_dirs: Vec<String> = ["Visual Studio".into(), "Windows Kits".into()].into_iter().collect();
+    let sln_name = PathBuf::from("sln_from_pid");
+    let sln_dir = PathBuf::from("c:/temp");
+    return build_sln(&sln_name, &sln_dir, proc.exe(), &pdb_paths, &source_roots, &exclude_dirs);
 }
 
 fn sln_from_exe() -> anyhow::Result<()> {
@@ -171,12 +176,19 @@ fn sln_from_exe() -> anyhow::Result<()> {
     //let test_target : PathBuf = "C:/source_control/fts_autosln/target/debug/deps/fts_autosln.exe".into();
     //let test_target: PathBuf = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe".into();
 
-    let user_roots: Vec<PathBuf> = vec!["C:/Program Files/Epic Games/UE_5.1".into()];
+    let source_roots: Vec<PathBuf> = vec!["C:/Program Files/Epic Games/UE_5.1".into()];
     let exclude_dirs: Vec<String> = ["Visual Studio".into(), "Windows Kits".into()].into_iter().collect();
 
     // Get PDBs for target
     println!("Finding PDBs");
     let pdbs = find_all_pdbs(&test_target)?;
+
+    let sln_name = PathBuf::from("sln_from_exe");
+    let sln_dir = PathBuf::from("c:/temp");
+    return build_sln(&sln_name, &sln_dir, &test_target, &pdbs, &source_roots, &exclude_dirs);
+}
+
+fn build_sln(sln_name: &Path, sln_dir: &Path, exe_path: &Path, pdbs: &[PathBuf], source_roots: &[PathBuf], exclude_dirs: &[String]) -> anyhow::Result<()> {
 
     // Map PDB paths to local files
     println!("Finding local files");
@@ -199,7 +211,7 @@ fn sln_from_exe() -> anyhow::Result<()> {
                     continue;
                 }
 
-                if let Some(local_file) = to_local_file(filepath, &user_roots, &known_maps) {
+                if let Some(local_file) = to_local_file(filepath, &source_roots, &known_maps) {
                     if exclude_dirs
                         .iter()
                         .any(|exclude| local_file.to_string_lossy().contains(exclude))
@@ -244,8 +256,10 @@ fn sln_from_exe() -> anyhow::Result<()> {
 
     // Write solution
     println!("Writing sln");
-    std::fs::create_dir_all("c:/temp/foo/")?;
-    let mut file = std::fs::File::create("c:/temp/foo/foo.sln")?;
+    std::fs::create_dir_all(sln_dir)?;
+    let mut sln_path = sln_dir.join(sln_name);
+    sln_path.set_extension("sln");
+    let mut file = std::fs::File::create(sln_path)?;
     file.write_all("\n".as_bytes())?; // empty newline
     file.write_all("Microsoft Visual Studio Solution File, Format Version 12.00\n".as_bytes())?;
     file.write_all("# Visual Studio Version 17\n".as_bytes())?;
@@ -258,19 +272,19 @@ fn sln_from_exe() -> anyhow::Result<()> {
         format!(
             "Project(\"{{{}}}\") = \"exe\", {:?}, \"{{{}}}\"\n",
             Uuid::new_v4(),
-            test_target,
+            exe_path,
             sln_id
         )
         .as_bytes(),
     )?;
     file.write_all("\tProjectSection(DebuggerProjectSystem) = preProject\n".as_bytes())?;
     file.write_all("\t\tPortSupplier = 00000000-0000-0000-0000-000000000000\n".as_bytes())?;
-    file.write_all(format!("\t\tExecutable = {}\n", test_target.to_string_lossy()).as_bytes())?;
+    file.write_all(format!("\t\tExecutable = {}\n", exe_path.to_string_lossy()).as_bytes())?;
     file.write_all("\t\tRemoteMachine = DESKTOP-1U7T4L2\n".as_bytes())?;
     file.write_all(
         format!(
             "\t\tStartingDirectory = {}\n",
-            test_target.parent().unwrap().to_string_lossy()
+            exe_path.parent().unwrap().to_string_lossy()
         )
         .as_bytes(),
     )?;
@@ -288,8 +302,9 @@ fn sln_from_exe() -> anyhow::Result<()> {
     let vcxproj_id = Uuid::new_v4();
     file.write_all(
         format!(
-            "Project(\"{{{}}}\") = \"source_code\", \"source_code.vcxproj\", \"{{{}}}\"\n",
+            "Project(\"{{{}}}\") = \"source_code\", \"{}.vcxproj\", \"{{{}}}\"\n",
             Uuid::new_v4(),
+            sln_name.to_string_lossy(),
             vcxproj_id
         )
         .as_bytes(),
@@ -311,7 +326,9 @@ fn sln_from_exe() -> anyhow::Result<()> {
 
     // Write vcxproj
     println!("Writing vcxproj");
-    let mut file = std::fs::File::create("c:/temp/foo/source_code.vcxproj")?;
+    let mut vcxproj_path = sln_dir.join(sln_name);
+    vcxproj_path.set_extension("vcxproj");
+    let mut file = std::fs::File::create(vcxproj_path)?;
     file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
     file.write_all(
         "<Project DefaultTargets=\"Build\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes(),
@@ -350,7 +367,9 @@ fn sln_from_exe() -> anyhow::Result<()> {
 
     // Write vcxproj.filters
     println!("Writing vcxproj.filters");
-    let mut file = std::fs::File::create("c:/temp/foo/source_code.vcxproj.filters")?;
+    let mut filters_path = sln_dir.join(sln_name);
+    filters_path.set_extension("vcxproj.filter");
+    let mut file = std::fs::File::create(filters_path)?;
     file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
     file.write_all(
         "<Project ToolsVersion=\"4.0\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n".as_bytes(),
