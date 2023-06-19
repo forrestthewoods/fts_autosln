@@ -396,7 +396,7 @@ fn build_sln(
     let vcxproj_id = Uuid::new_v4();
     file.write_all(
         format!(
-            "Project(\"{{{}}}\") = \"source_code\", \"{}.vcxproj\", \"{{{}}}\"\n",
+            "Project(\"{{{}}}\") = \"source_code\", \"{}_source_code.vcxproj\", \"{{{}}}\"\n",
             Uuid::new_v4(),
             sln_name.to_string_lossy(),
             vcxproj_id
@@ -410,7 +410,7 @@ fn build_sln(
     file.write_all("\t\tRelease|x64 = Release|x64\n".as_bytes())?;
     file.write_all("\tEndGlobalSection\n".as_bytes())?;
     file.write_all("\tGlobalSection(ProjectConfigurationPlatforms) = postSolution\n".as_bytes())?;
-    file.write_all(format!("\t\t{{{}}}.Release|x64.ActiveCfg = Release|x64\n", sln_id).as_bytes())?;
+    //file.write_all(format!("\t\t{{{}}}.Release|x64.ActiveCfg = Release|x64\n", sln_id).as_bytes())?;
     file.write_all(format!("\t\t{{{}}}.Release|x64.ActiveCfg = Release|x64\n", vcxproj_id).as_bytes())?;
     file.write_all("\tEndGlobalSection\n".as_bytes())?;
     file.write_all("\tGlobalSection(ExtensibilityGlobals) = postSolution\n".as_bytes())?;
@@ -419,9 +419,9 @@ fn build_sln(
     file.write_all("EndGlobal\n".as_bytes())?;
 
     // Write vcxproj
-    let mut vcxproj_path = sln_dir.join(sln_name);
-    vcxproj_path.set_extension("vcxproj");
-    println!("Writing vcxproj: [{}", vcxproj_path.to_string_lossy());
+    let mut vcxproj_path : PathBuf = sln_dir.to_owned();
+    vcxproj_path.push(format!("{}_source_code.vcxproj", sln_name.to_string_lossy()));
+    println!("Writing vcxproj: [{}]", vcxproj_path.to_string_lossy());
 
     let mut file = std::fs::File::create(vcxproj_path)?;
     file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
@@ -460,9 +460,9 @@ fn build_sln(
     file.write_all("</Project>\n".as_bytes())?;
 
     // Write vcxproj.filters
-    let mut filters_path = sln_dir.join(sln_name);
-    filters_path.set_extension("vcxproj.filters");
-    println!("Writing vcxproj.filters: [{}", filters_path.to_string_lossy());
+    let mut filters_path : PathBuf = sln_dir.to_owned();
+    filters_path.push(format!("{}_source_code.vcxproj.filters", sln_name.to_string_lossy()));
+    println!("Writing vcxproj.filters: [{}]", filters_path.to_string_lossy());
 
     let mut file = std::fs::File::create(filters_path)?;
     file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
