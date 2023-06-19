@@ -166,7 +166,7 @@ fn sln_from_pid(name: &str) -> anyhow::Result<()> {
     let source_roots: Vec<PathBuf> = vec!["C:/Program Files/Epic Games/UE_5.1".into()];
     let exclude_dirs: Vec<String> = ["Visual Studio".into(), "Windows Kits".into()].into_iter().collect();
     let sln_name = PathBuf::from("sln_from_pid");
-    let sln_dir = PathBuf::from("c:/temp");
+    let sln_dir = PathBuf::from("c:/temp/foo_pid");
     return build_sln(&sln_name, &sln_dir, proc.exe(), &pdb_paths, &source_roots, &exclude_dirs);
 }
 
@@ -177,6 +177,7 @@ fn sln_from_exe() -> anyhow::Result<()> {
     //let test_target: PathBuf = "C:/temp/cpp/autosln_tests/x64/Debug/autosln_tests.exe".into();
 
     let source_roots: Vec<PathBuf> = vec!["C:/Program Files/Epic Games/UE_5.1".into()];
+    //let source_roots: Vec<PathBuf> = vec!["C:/source_control/fts_autosln".into()];
     let exclude_dirs: Vec<String> = ["Visual Studio".into(), "Windows Kits".into()].into_iter().collect();
 
     // Get PDBs for target
@@ -184,7 +185,7 @@ fn sln_from_exe() -> anyhow::Result<()> {
     let pdbs = find_all_pdbs(&test_target)?;
 
     let sln_name = PathBuf::from("sln_from_exe");
-    let sln_dir = PathBuf::from("c:/temp");
+    let sln_dir = PathBuf::from("c:/temp/foo_exe");
     return build_sln(&sln_name, &sln_dir, &test_target, &pdbs, &source_roots, &exclude_dirs);
 }
 
@@ -255,10 +256,11 @@ fn build_sln(sln_name: &Path, sln_dir: &Path, exe_path: &Path, pdbs: &[PathBuf],
         .collect();
 
     // Write solution
-    println!("Writing sln");
     std::fs::create_dir_all(sln_dir)?;
     let mut sln_path = sln_dir.join(sln_name);
     sln_path.set_extension("sln");
+    println!("Writing sln - [{}]", sln_path.to_string_lossy());
+
     let mut file = std::fs::File::create(sln_path)?;
     file.write_all("\n".as_bytes())?; // empty newline
     file.write_all("Microsoft Visual Studio Solution File, Format Version 12.00\n".as_bytes())?;
@@ -270,8 +272,9 @@ fn build_sln(sln_name: &Path, sln_dir: &Path, exe_path: &Path, pdbs: &[PathBuf],
     let sln_id = Uuid::new_v4();
     file.write_all(
         format!(
-            "Project(\"{{{}}}\") = \"exe\", {:?}, \"{{{}}}\"\n",
+            "Project(\"{{{}}}\") = \"{}\", {:?}, \"{{{}}}\"\n",
             Uuid::new_v4(),
+            exe_path.file_name().unwrap().to_string_lossy(),
             exe_path,
             sln_id
         )
@@ -325,9 +328,10 @@ fn build_sln(sln_name: &Path, sln_dir: &Path, exe_path: &Path, pdbs: &[PathBuf],
     file.write_all("EndGlobal\n".as_bytes())?;
 
     // Write vcxproj
-    println!("Writing vcxproj");
     let mut vcxproj_path = sln_dir.join(sln_name);
     vcxproj_path.set_extension("vcxproj");
+    println!("Writing vcxproj - [{}", vcxproj_path.to_string_lossy());
+
     let mut file = std::fs::File::create(vcxproj_path)?;
     file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
     file.write_all(
@@ -366,9 +370,10 @@ fn build_sln(sln_name: &Path, sln_dir: &Path, exe_path: &Path, pdbs: &[PathBuf],
     file.write_all("</Project>\n".as_bytes())?;
 
     // Write vcxproj.filters
-    println!("Writing vcxproj.filters");
     let mut filters_path = sln_dir.join(sln_name);
-    filters_path.set_extension("vcxproj.filter");
+    filters_path.set_extension("vcxproj.filters");
+    println!("Writing vcxproj.filters - [{}", filters_path.to_string_lossy());
+
     let mut file = std::fs::File::create(filters_path)?;
     file.write_all("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".as_bytes())?;
     file.write_all(
