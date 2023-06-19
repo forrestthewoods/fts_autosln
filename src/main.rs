@@ -59,9 +59,13 @@ enum Commands {
         /// name of process; example: UnrealEditor.exe
         process_name: String,
 
-        /// Include _NT_SYMBOL_PATH in symbol search path (default = true)
-        #[arg(short = 'n', long = "nt_symbols", default_value_t = true)]
+        /// Include _NT_SYMBOL_PATH in symbol search path (default = false)
+        #[arg(short = 'n', long = "nt_symbols", default_value_t = false)]
         include_nt_symbol_path: bool,
+
+        /// Extra symbol server to includee in search path
+        #[arg(short = 's', long)]
+        extra_symbol_servers: Option<Vec<String>>,
     },
 }
 
@@ -82,13 +86,16 @@ fn main() -> anyhow::Result<()> {
         Commands::FromProcessName {
             process_name,
             include_nt_symbol_path,
+            extra_symbol_servers,
         } => {
+            let empty : Vec<String> = Default::default();
             sln_from_process_name(
                 &process_name,
                 &args.sln_path,
                 &args.source_roots.unwrap_or_default(),
                 &args.exclude_dirs.unwrap_or_default(),
                 *include_nt_symbol_path,
+                extra_symbol_servers.as_ref().unwrap_or(&empty)
             )?;
         }
     }
@@ -105,6 +112,7 @@ fn sln_from_process_name(
     source_roots: &[PathBuf],
     exclude_dirs: &[String],
     include_nt_symbol_path: bool,
+    extra_symbol_servers: &[String]
 ) -> anyhow::Result<()> {
     // Find process
     let s = sysinfo::System::new_all();
@@ -182,9 +190,12 @@ fn sln_from_process_name(
 
         // Build the PDB search path
         let mut search_path: String = module_dirs.iter().map(|d| d.to_string_lossy()).join(";");
+        search_path.push(';');
+        for symbol_server in extra_symbol_servers {
+            search_path.push_str(&format!("srv*{};", symbol_server));
+        }
         if include_nt_symbol_path {
             if let Ok(nt_symbol_path) = env::var("_NT_SYMBOL_PATH") {
-                search_path.push(';');
                 search_path.push_str(&nt_symbol_path);
             }
         }
