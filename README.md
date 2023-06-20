@@ -29,4 +29,4 @@ Download from [Releases](https://github.com/forrestthewoods/fts_autosln/releases
 
 # Additional Information
 
-For more details please refer to the [blog post](fts_autosln: Build Visual Studio Solutions from PDBs).
+For more details please refer to the [blog post](https://www.forrestthewoods.com/blog/fts_autosln-build-visual-studio-soluions-from-pdbs/)
